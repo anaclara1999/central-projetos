@@ -789,6 +789,26 @@ table.data-table tbody tr:last-child td { border-bottom: none; }
 .checklist-item-text { flex: 1; font-size: 13px; color: var(--text-primary); }
 .checklist-item-text.done { text-decoration: line-through; color: var(--text-muted); }
 
+/* anexos e comentários (tarefas) */
+.link-btn { background: none; border: none; padding: 0; color: var(--link); text-decoration: underline; cursor: pointer; font: inherit; font-size: inherit; }
+.attachment-grid { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
+.attachment-card { position: relative; width: 84px; height: 84px; border-radius: var(--radius-sm); border: 1px solid var(--border); overflow: hidden; background: var(--surface-sunken); }
+.attachment-card img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.attachment-card-file { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px; width: 100%; height: 100%; color: var(--text-secondary); text-align: center; padding: 4px; }
+.attachment-card-file span { font-size: 10px; line-height: 1.2; word-break: break-word; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+.attachment-remove { position: absolute; top: 2px; right: 2px; background: rgba(20,20,19,0.55); color: #fff; width: 18px; height: 18px; padding: 0; }
+.attachment-remove:hover { background: rgba(20,20,19,0.8); color: #fff; }
+.attachment-dropzone {
+  display: flex; align-items: center; gap: 8px; margin-top: 8px; padding: 10px 12px; border: 1px dashed var(--border-strong);
+  border-radius: var(--radius-sm); color: var(--text-muted); font-size: 12px; cursor: text;
+}
+.attachment-dropzone:focus { outline: none; border-color: var(--accent-strong); color: var(--text-secondary); }
+.comment-list { display: flex; flex-direction: column; gap: 10px; margin-bottom: 4px; }
+.comment-item { padding: 8px 10px; border-radius: var(--radius-sm); background: var(--surface-sunken); }
+.comment-item-head { display: flex; align-items: center; gap: 8px; }
+.comment-item-date { font-size: 11px; color: var(--text-muted); flex: 1; }
+.comment-item-text { font-size: 13px; color: var(--text-primary); margin-top: 4px; white-space: pre-wrap; }
+
 /* botão global "+ Novo" */
 .fab-new {
   position: fixed; bottom: 26px; right: 28px; width: 54px; height: 54px; border-radius: 50%;
@@ -967,10 +987,8 @@ function listasToArrayDocs(listasObj) {
 const DEFAULT_LISTS = {
   projeto_status: { label: "Status (Projetos)", itens: seedListItems(["Planejamento", "Em andamento", "Aguardando", "Pausado", "Concluído"], { "Concluído": "concluido", "Pausado": "pausado" }) },
   projeto_saude: { label: "Saúde (Projetos)", itens: seedListItems(["Saudável", "Atenção", "Crítico"], { "Atenção": "atencao", "Crítico": "critico" }) },
-  projeto_prioridade: { label: "Prioridade (Projetos)", itens: seedListItems(["Alta", "Média", "Baixa"]) },
   projeto_area: { label: "Áreas (Projetos)", itens: [] }, // semeada também a partir das áreas já usadas nos projetos existentes (ver migração)
   tarefa_status: { label: "Status (Tarefas)", itens: seedListItems(["A fazer", "Em andamento", "Aguardando", "Concluído"], { "Concluído": "concluido" }) },
-  tarefa_prioridade: { label: "Prioridade (Tarefas)", itens: seedListItems(["Alta", "Média", "Baixa"]) },
   decisao_status: { label: "Status (Decisões)", itens: seedListItems(["Em análise", "Aguardando definição", "Definida", "Revisada", "Cancelada"]) },
   pendencia_status: { label: "Status (Pendências)", itens: seedListItems(["Aberta", "Atrasada", "Resolvida"], { "Resolvida": "resolvida" }) },
   pendencia_prioridade: { label: "Prioridade (Pendências)", itens: seedListItems(["Alta", "Média", "Baixa"]) },
@@ -1211,6 +1229,35 @@ function riskTone(tipo) {
   return { "Risco": "warning", "Problema": "danger", "Impedimento": "accent" }[tipo] || "neutral";
 }
 function priorityClass(p) { return normalize(p); }
+
+/* Prioridade de Tarefas e Projetos: escala numérica fixa 0–3 (0 = crítica/pra ontem, 3 = sem
+   prioridade), com cor por nível — não é mais uma lista configurável (ver DEFAULT_LISTS), já que
+   o significado de cada nível é fixo. priorityInfo aceita também os valores antigos em texto
+   ("Alta"/"Média"/"Baixa") para não quebrar registros gravados antes desta mudança. */
+const PRIORITY_LEVELS = [
+  { valor: 0, nome: "P0 · Crítica", descricao: "Crítica — para ontem", tone: "danger" },
+  { valor: 1, nome: "P1 · Alta", descricao: "Alta prioridade", tone: "warning" },
+  { valor: 2, nome: "P2 · Média", descricao: "Prioridade média", tone: "info" },
+  { valor: 3, nome: "P3 · Sem prioridade", descricao: "Sem prioridade definida", tone: "neutral" },
+];
+function priorityInfo(v) {
+  let n = v;
+  if (typeof v !== "number") {
+    n = v === "Alta" ? 1 : v === "Baixa" ? 3 : 2; // "Média" ou qualquer outro valor antigo cai em P2
+  }
+  return PRIORITY_LEVELS.find((l) => l.valor === n) || PRIORITY_LEVELS[2];
+}
+function PriorityBadge({ value }) {
+  const info = priorityInfo(value);
+  return <span className={cx("pill", "tone-" + info.tone)} title={info.descricao}>{info.nome}</span>;
+}
+function PrioritySelect({ value, onChange }) {
+  return (
+    <select className="v" value={priorityInfo(value).valor} onChange={(e) => onChange(Number(e.target.value))} style={fieldInputStyle}>
+      {PRIORITY_LEVELS.map((l) => <option key={l.valor} value={l.valor}>{l.nome}</option>)}
+    </select>
+  );
+}
 
 /* ---------------------------------- ÍCONES ------------------------------------ */
 function Icon({ name, size = 16, className }) {
@@ -1532,6 +1579,7 @@ function App() {
   const [decisionForm, setDecisionForm] = useState(null); // null | { mode: "create"|"edit", projectId, decision }
   const [pendencyForm, setPendencyForm] = useState(null); // null | { mode: "create"|"edit", projectId, pendency }
   const [riskForm, setRiskForm] = useState(null); // null | { mode: "create"|"edit", projectId, risk }
+  const [taskForm, setTaskForm] = useState(null); // null | { mode: "create"|"edit", projectId, task }
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [theme, setTheme] = useState("system");
   const [toast, setToast] = useState(null);
@@ -2349,9 +2397,10 @@ function App() {
     const id = "t" + (Date.now() % 100000);
     const t = {
       id, titulo: partial.titulo, descricao: partial.descricao || "", projectId: partial.projectId || null,
-      origem: partial.origem || { tipo: "manual" }, prioridade: partial.prioridade || "Média",
+      origem: partial.origem || { tipo: "manual" }, prioridade: typeof partial.prioridade === "number" ? partial.prioridade : 2,
       responsavel: partial.responsavel || "clara", prazo: partial.prazo || null,
-      status: "A fazer", observacoes: "", checklist: [], criadoEm: TODAY,
+      status: partial.status || "A fazer", observacoes: partial.observacoes || "", checklist: [], comentarios: [], anexos: [],
+      criadoEm: TODAY, statusAlteradoEm: TODAY, concluidoEm: null,
     };
     setTasks((prev) => [t, ...prev]);
     persistDoc("tasks", id, t);
@@ -2366,10 +2415,71 @@ function App() {
   function setTaskStatus(id, status) {
     setTasks((prev) => prev.map((t) => {
       if (t.id !== id) return t;
-      const next = { ...t, status, concluidoEm: status === "Concluído" ? TODAY : t.concluidoEm };
+      const next = { ...t, status, statusAlteradoEm: TODAY, concluidoEm: status === "Concluído" ? TODAY : t.concluidoEm };
       persistDoc("tasks", id, next);
       return next;
     }));
+  }
+  function updateTaskRecord(id, patch) {
+    let next = null;
+    setTasks((prev) => prev.map((t) => {
+      if (t.id !== id) return t;
+      next = { ...t, ...patch };
+      if (patch.status && patch.status !== t.status) {
+        next.statusAlteradoEm = TODAY;
+        next.concluidoEm = patch.status === "Concluído" ? TODAY : t.concluidoEm;
+      }
+      return next;
+    }));
+    if (next) persistDoc("tasks", id, next);
+  }
+  function deleteTask(id) {
+    setTasks((prev) => prev.filter((t) => t.id !== id));
+    deleteDocRemote("tasks", id);
+  }
+  function addTaskComment(taskId, texto, anexos) {
+    if (!texto.trim() && (!anexos || anexos.length === 0)) return;
+    const now = new Date();
+    const comentario = {
+      id: "cm" + (Date.now() % 100000) + Math.floor(Math.random() * 99),
+      autor: "clara", data: TODAY, hora: String(now.getHours()).padStart(2, "0") + ":" + String(now.getMinutes()).padStart(2, "0"),
+      texto: texto.trim(), anexos: anexos || [],
+    };
+    let next = null;
+    setTasks((prev) => prev.map((t) => {
+      if (t.id !== taskId) return t;
+      next = { ...t, comentarios: [...(t.comentarios || []), comentario] };
+      return next;
+    }));
+    if (next) persistDoc("tasks", taskId, next);
+  }
+  function deleteTaskComment(taskId, commentId) {
+    let next = null;
+    setTasks((prev) => prev.map((t) => {
+      if (t.id !== taskId) return t;
+      next = { ...t, comentarios: (t.comentarios || []).filter((c) => c.id !== commentId) };
+      return next;
+    }));
+    if (next) persistDoc("tasks", taskId, next);
+  }
+  function addTaskAttachment(taskId, anexo) {
+    const rec = { id: "an" + (Date.now() % 100000) + Math.floor(Math.random() * 99), criadoEm: TODAY, ...anexo };
+    let next = null;
+    setTasks((prev) => prev.map((t) => {
+      if (t.id !== taskId) return t;
+      next = { ...t, anexos: [...(t.anexos || []), rec] };
+      return next;
+    }));
+    if (next) persistDoc("tasks", taskId, next);
+  }
+  function removeTaskAttachment(taskId, anexoId) {
+    let next = null;
+    setTasks((prev) => prev.map((t) => {
+      if (t.id !== taskId) return t;
+      next = { ...t, anexos: (t.anexos || []).filter((a) => a.id !== anexoId) };
+      return next;
+    }));
+    if (next) persistDoc("tasks", taskId, next);
   }
   function addDiaryEntry(entry) {
     const id = "dy" + (Date.now() % 100000) + Math.floor(Math.random() * 99);
@@ -2460,7 +2570,7 @@ function App() {
     const rec = {
       id, nome: (partial.nome || "").trim() || "Novo projeto", descricao: partial.descricao || "", objetivo: partial.objetivo || "",
       area: partial.area || "", responsavel: partial.responsavel || "clara", sponsor: partial.sponsor || "",
-      prioridade: partial.prioridade || "Média", status: partial.status || "Planejamento", saude: partial.saude || "Saudável",
+      prioridade: typeof partial.prioridade === "number" ? partial.prioridade : 2, status: partial.status || "Planejamento", saude: partial.saude || "Saudável",
       percentual: Number.isFinite(partial.percentual) ? partial.percentual : 0,
       dataInicio: partial.dataInicio || TODAY, prazoPrevisto: partial.prazoPrevisto || TODAY,
       proximoMarcoId: null, proximaAcao: partial.proximaAcao || "", dependeDeIds: partial.dependeDeIds || [],
@@ -2572,10 +2682,8 @@ function App() {
     const checkers = {
       projeto_status: (id) => projects.some((p) => p.status === id),
       projeto_saude: (id) => projects.some((p) => p.saude === id),
-      projeto_prioridade: (id) => projects.some((p) => p.prioridade === id),
       projeto_area: (id) => projects.some((p) => p.area === id),
       tarefa_status: (id) => tasks.some((t) => t.status === id),
-      tarefa_prioridade: (id) => tasks.some((t) => t.prioridade === id),
       decisao_status: (id) => decisions.some((d) => d.status === id),
       pendencia_status: (id) => pendencies.some((p) => p.status === id),
       pendencia_prioridade: (id) => pendencies.some((p) => p.prioridade === id),
@@ -2810,7 +2918,7 @@ function App() {
       if (item._status !== "added") return;
       const rec = addTask({
         titulo: item.titulo, projectId, origem: { tipo: "reuniao", id: meeting.id },
-        prioridade: "Média", responsavel: item.responsavelSugerido || "clara", prazo: item.prazoSugerido || null,
+        prioridade: 2, responsavel: item.responsavelSugerido || "clara", prazo: item.prazoSugerido || null,
         suppressDiary: true,
       });
       addDiaryEntry({ projectId, data: TODAY, hora, tipo: "atualizacao", titulo: "Tarefa criada (via IA) — " + item.titulo, descricao: "Enviada para Minha Central e para o projeto.", relacionado: { tipo: "tarefa", id: rec.id } });
@@ -2902,13 +3010,16 @@ function App() {
   function closePendencyForm() { setPendencyForm(null); }
   function openRiskForm(projectId, risk) { setRiskForm({ mode: risk ? "edit" : "create", projectId, risk: risk || null }); }
   function closeRiskForm() { setRiskForm(null); }
+  function openTaskForm(projectId, task) { setTaskForm({ mode: task ? "edit" : "create", projectId, task: task || null }); }
+  function closeTaskForm() { setTaskForm(null); }
   /* editor de anotação: navega para a tela cheia dedicada em vez de abrir modal/drawer */
   function openNoteEditor(noteId, opts = {}) { navigate("noteEditor", { noteId: noteId || "new", ...opts }); }
 
   /* dados agregados usados em várias telas */
   const ctx = { tasks, meetings, decisions, pendencies, risks, changes, diary, documents, milestones, notes, reminders, projects,
     empresas, pessoas, listas, identidadeVisual,
-    setTaskStatus, addTask, openDrawer, openProject, navigate, goToRecord, setQuickList, confirmAiSuggestions, addDiaryEntry,
+    setTaskStatus, addTask, updateTaskRecord, deleteTask, openTaskForm, addTaskComment, deleteTaskComment, addTaskAttachment, removeTaskAttachment,
+    openDrawer, openProject, navigate, goToRecord, setQuickList, confirmAiSuggestions, addDiaryEntry,
     addNote, updateNote, deleteNote, openNoteEditor, addDocument, deleteDocument, addReminder, toggleReminder, deleteReminder,
     addChecklistItem, toggleChecklistItem, removeChecklistItem,
     addMeetingManual, addDecisionManual, updateDecisionRecord, addPendencyManual, updatePendencyRecord, addRiskManual, updateRiskRecord,
@@ -2996,6 +3107,7 @@ function App() {
       {decisionForm && <DecisionFormModal data={decisionForm} ctx={ctx} onClose={closeDecisionForm} />}
       {pendencyForm && <PendencyFormModal data={pendencyForm} ctx={ctx} onClose={closePendencyForm} />}
       {riskForm && <RiskFormModal data={riskForm} ctx={ctx} onClose={closeRiskForm} />}
+      {taskForm && <TaskFormModal data={taskForm} ctx={ctx} onClose={closeTaskForm} />}
       <NewItemButton ctx={ctx} />
       {toast && <div className="toast"><Icon name="check" size={15} />{toast}</div>}
     </div>
@@ -3202,7 +3314,7 @@ function PortfolioView({ ctx }) {
     (filters.saude === "Todas" || p.saude === filters.saude) &&
     (filters.area === "Todas" || p.area === filters.area) &&
     (filters.empresa === "Todas" || (filters.empresa === "__pessoal__" ? !p.empresaId : p.empresaId === filters.empresa)) &&
-    (filters.prioridade === "Todas" || p.prioridade === filters.prioridade) &&
+    (filters.prioridade === "Todas" || String(priorityInfo(p.prioridade).valor) === filters.prioridade) &&
     (filters.responsavel === "Todos" || p.responsavel === filters.responsavel) &&
     matchesPeriodo(p)
   );
@@ -3268,8 +3380,8 @@ function PortfolioView({ ctx }) {
           {ctx.empresas.filter((e) => e.ativa).map((e) => <option key={e.id} value={e.id}>{e.nome}</option>)}
         </select>
         <select value={filters.prioridade} onChange={(e) => setFilters({ ...filters, prioridade: e.target.value })}>
-          <option value="Todas">Todas</option>
-          {(ctx.listas.projeto_prioridade || []).filter((i) => i.ativo).map((i) => <option key={i.id} value={i.id}>{i.nome}</option>)}
+          <option value="Todas">Prioridade: todas</option>
+          {PRIORITY_LEVELS.map((l) => <option key={l.valor} value={l.valor}>{l.nome}</option>)}
         </select>
         <select value={filters.responsavel} onChange={(e) => setFilters({ ...filters, responsavel: e.target.value })}>
           <option>Todos</option>{responsaveis.map((r) => <option key={r} value={r}>{personLabel(r)}</option>)}
@@ -3371,7 +3483,7 @@ function ProjectCard({ project: p, ctx }) {
       <ProgressBar pct={p.percentual} />
 
       <div className="project-card-meta">
-        <div><span className="k">Prioridade </span><span className={cx("priority-tag", priorityClass(p.prioridade))}>{p.prioridade}</span></div>
+        <div><span className="k">Prioridade </span><PriorityBadge value={p.prioridade} /></div>
         <div><span className="k">Prazo </span><span className="mono">{fmtDate(p.prazoPrevisto)}</span></div>
         <div style={{ gridColumn: "1 / -1" }}><span className="k">Próximo marco </span>{milestone ? milestone.marco : "—"}</div>
         {p.proximaAcao && <div style={{ gridColumn: "1 / -1" }}><span className="k">Próxima ação </span>{p.proximaAcao}</div>}
@@ -3411,7 +3523,7 @@ function ProjectsTable({ projects, ctx }) {
                 <td>{empresaLabel(p.empresaId)}</td>
                 <td><PersonChip personKey={p.responsavel} /></td>
                 <td>{p.sponsor ? <PersonChip personKey={p.sponsor} /> : "—"}</td>
-                <td><span className={cx("priority-tag", priorityClass(p.prioridade))}>{p.prioridade}</span></td>
+                <td><PriorityBadge value={p.prioridade} /></td>
                 <td><Pill tone={projectTone(p.status)} dot>{p.status}</Pill></td>
                 <td><Pill tone={saudeTone(p.saude)}>{p.saude}</Pill></td>
                 <td style={{ minWidth: 120 }}><ProgressBar pct={p.percentual} /></td>
@@ -3463,7 +3575,7 @@ function computeMeuFocoHoje(ctx) {
   openPend.filter((p) => p.prazo && daysUntil(p.prazo) < 0).forEach((p) => add("pendencia", p, "Atrasada"));
   openTasks.filter((t) => t.prazo && daysUntil(t.prazo) === 0).forEach((t) => add("tarefa", t, "Vence hoje"));
   openPend.filter((p) => p.prazo && daysUntil(p.prazo) === 0).forEach((p) => add("pendencia", p, "Vence hoje"));
-  openTasks.filter((t) => t.prioridade === "Alta").forEach((t) => add("tarefa", t, "Prioridade alta"));
+  openTasks.filter((t) => priorityInfo(t.prioridade).valor <= 1).forEach((t) => add("tarefa", t, "Prioridade alta"));
   openPend.filter((p) => p.prioridade === "Alta").forEach((p) => add("pendencia", p, "Prioridade alta"));
   openTasks.filter((t) => t.status === "Aguardando").forEach((t) => add("tarefa", t, "Follow-up necessário"));
   openPend.filter((p) => p.proximoAcompanhamento && daysUntil(p.proximoAcompanhamento) <= 0).forEach((p) => add("pendencia", p, "Acompanhamento vencido"));
@@ -3494,6 +3606,7 @@ function MinhaCentralView({ ctx }) {
   const { tasks, addTask, setTaskStatus, openDrawer } = ctx;
   const [novoTitulo, setNovoTitulo] = useState("");
   const [novoProjeto, setNovoProjeto] = useState("");
+  const [filtroStatus, setFiltroStatus] = useState("Todos");
   const foco = useMemo(() => computeMeuFocoHoje(ctx), [ctx.tasks, ctx.pendencies]);
 
   function handleAdd(e) {
@@ -3503,7 +3616,8 @@ function MinhaCentralView({ ctx }) {
     setNovoTitulo("");
   }
 
-  const mine = tasks; // nesta versão, "Minha Central" consolida tarefas — filtro por responsável poderia ser adicionado depois
+  // nesta versão, "Minha Central" consolida tarefas — filtro por responsável poderia ser adicionado depois
+  const mine = filtroStatus === "Todos" ? tasks : tasks.filter((t) => t.status === filtroStatus);
   const buckets = { atrasadas: [], hoje: [], semana: [], proximas: [], aguardando: [], semPrazo: [], concluidas: [] };
   mine.forEach((t) => {
     if (t.status === "Concluído") { buckets.concluidas.push(t); return; }
@@ -3533,6 +3647,14 @@ function MinhaCentralView({ ctx }) {
       <div className="section-head">
         <h2>Organização diária</h2>
         <span className="hint">{mine.filter((t) => t.status !== "Concluído").length} tarefas em aberto</span>
+      </div>
+
+      <div style={{ display: "flex", gap: 8, alignItems: "center", margin: "0 0 14px" }}>
+        <span className="k" style={{ fontSize: 11.5 }}>Filtrar por status</span>
+        <select value={filtroStatus} onChange={(e) => setFiltroStatus(e.target.value)} style={{ ...fieldInputStyle, width: "auto" }}>
+          <option value="Todos">Todos</option>
+          {(ctx.listas.tarefa_status || []).filter((i) => i.ativo).map((i) => <option key={i.id} value={i.id}>{i.nome}</option>)}
+        </select>
       </div>
 
       <div className="group-heading tone-accent"><Icon name="target" size={13} /> Meu foco hoje <span className="n">{foco.length}</span></div>
@@ -3578,8 +3700,10 @@ function TaskRow({ task: t, onOpen, onToggle }) {
       <div className="item-row-main" onClick={onOpen}>
         <span className="item-row-title">{t.titulo}</span>
         <div className="item-row-tags">
-          {project && <Pill tone="neutral">{project.nome}</Pill>}
-          <span className={cx("priority-tag", priorityClass(t.prioridade))}>{t.prioridade}</span>
+          {project
+            ? <Pill tone="neutral"><Icon name="layers" size={10} /> {project.nome}</Pill>
+            : <Pill tone="neutral"><Icon name="user" size={10} /> Pessoal</Pill>}
+          <PriorityBadge value={t.prioridade} />
           {t.origem && t.origem.tipo !== "manual" && <span className="origin-tag"><Icon name="link" size={11} /> via {ORIGEM_LABEL[t.origem.tipo]}</span>}
         </div>
       </div>
@@ -3625,7 +3749,7 @@ function ProjectView({ route, ctx, navigate }) {
               {project.arquivado && <Pill tone="neutral"><Icon name="archive" size={10} /> Arquivado</Pill>}
               <Pill tone={projectTone(project.status)} dot>{project.status}</Pill>
               <Pill tone={saudeTone(project.saude)}>Saúde: {project.saude}</Pill>
-              <span className={cx("priority-tag", priorityClass(project.prioridade))}>Prioridade {project.prioridade}</span>
+              <PriorityBadge value={project.prioridade} />
               <Pill tone="neutral">{project.area}</Pill>
               <Pill tone="info">{empresaLabel(project.empresaId)}</Pill>
             </div>
@@ -3826,7 +3950,9 @@ function DiarioTab({ project, ctx }) {
 /* ----------------------------------- TAREFAS ----------------------------------- */
 function TarefasTab({ project, ctx }) {
   const [novoTitulo, setNovoTitulo] = useState("");
-  const list = ctx.tasks.filter((t) => t.projectId === project.id).sort((a, b) => (a.prazo || "9999") < (b.prazo || "9999") ? -1 : 1);
+  const [filtroStatus, setFiltroStatus] = useState("Todos");
+  const listaCompleta = ctx.tasks.filter((t) => t.projectId === project.id).sort((a, b) => (a.prazo || "9999") < (b.prazo || "9999") ? -1 : 1);
+  const list = filtroStatus === "Todos" ? listaCompleta : listaCompleta.filter((t) => t.status === filtroStatus);
   const abertas = list.filter((t) => t.status !== "Concluído");
   const concluidas = list.filter((t) => t.status === "Concluído");
 
@@ -3845,6 +3971,13 @@ function TarefasTab({ project, ctx }) {
         <input type="text" placeholder="Nova tarefa vinculada a este projeto" value={novoTitulo} onChange={(e) => setNovoTitulo(e.target.value)} />
         <button type="submit" className="btn btn-primary btn-sm">Adicionar</button>
       </form>
+      <div style={{ display: "flex", gap: 8, alignItems: "center", margin: "0 0 14px" }}>
+        <span className="k" style={{ fontSize: 11.5 }}>Filtrar por status</span>
+        <select value={filtroStatus} onChange={(e) => setFiltroStatus(e.target.value)} style={{ ...fieldInputStyle, width: "auto" }}>
+          <option value="Todos">Todos</option>
+          {(ctx.listas.tarefa_status || []).filter((i) => i.ativo).map((i) => <option key={i.id} value={i.id}>{i.nome}</option>)}
+        </select>
+      </div>
       <div className="list-stack" style={{ marginBottom: 22 }}>
         {abertas.length === 0 && <EmptyState text="Nenhuma tarefa em aberto neste projeto." />}
         {abertas.map((t) => <TaskRow key={t.id} task={t} onOpen={() => ctx.openDrawer("tarefa", t.id)} onToggle={() => ctx.setTaskStatus(t.id, "Concluído")} />)}
@@ -5930,7 +6063,156 @@ function ChecklistBlock({ task, ctx }) {
   );
 }
 
+/* Lê um arquivo de imagem, redimensiona (maxSize no maior lado) e devolve um dataURL JPEG —
+   mesma técnica usada no upload do logo, reaproveitada aqui para prints colados (Ctrl+V) ou
+   anexados a uma tarefa/comentário, para não deixar o JSON de dados pesado demais. */
+function readAndCompressImage(file, maxSize, cb) {
+  const reader = new FileReader();
+  reader.onload = () => {
+    const img = new Image();
+    img.onload = () => {
+      let width = img.width, height = img.height;
+      if (width > maxSize || height > maxSize) {
+        const scale = maxSize / Math.max(width, height);
+        width = Math.round(width * scale);
+        height = Math.round(height * scale);
+      }
+      const canvas = document.createElement("canvas");
+      canvas.width = width; canvas.height = height;
+      canvas.getContext("2d").drawImage(img, 0, 0, width, height);
+      cb(canvas.toDataURL("image/jpeg", 0.82));
+    };
+    img.src = String(reader.result);
+  };
+  reader.readAsDataURL(file);
+}
+function pasteImageItems(e, onImage) {
+  const items = e.clipboardData && e.clipboardData.items;
+  if (!items) return;
+  for (const item of items) {
+    if (item.type.indexOf("image/") === 0) {
+      e.preventDefault();
+      onImage(item.getAsFile());
+    }
+  }
+}
+
+function AttachmentsBlock({ task, ctx }) {
+  const fileRef = useRef(null);
+  const anexos = task.anexos || [];
+
+  function addFile(file) {
+    if (!file) return;
+    if (file.type.indexOf("image/") === 0) {
+      readAndCompressImage(file, 1000, (dataUrl) => {
+        ctx.addTaskAttachment(task.id, { nome: file.name || "print.jpg", tipo: "imagem", dataUrl });
+      });
+      return;
+    }
+    if (file.size > 4 * 1024 * 1024) { ctx.setToast("Arquivo muito grande — o limite é 4 MB."); return; }
+    const reader = new FileReader();
+    reader.onload = () => ctx.addTaskAttachment(task.id, { nome: file.name, tipo: file.type || "arquivo", tamanho: file.size, dataUrl: String(reader.result) });
+    reader.readAsDataURL(file);
+  }
+
+  return (
+    <div className="field-block">
+      <span className="k">Anexos {anexos.length > 0 && <span style={{ textTransform: "none", fontWeight: 500, color: "var(--text-muted)" }}>— {anexos.length}</span>}</span>
+      {anexos.length > 0 && (
+        <div className="attachment-grid">
+          {anexos.map((a) => (
+            <div className="attachment-card" key={a.id}>
+              {a.tipo === "imagem"
+                ? <a href={a.dataUrl} target="_blank" rel="noreferrer"><img src={a.dataUrl} alt={a.nome} /></a>
+                : <a href={a.dataUrl} target="_blank" rel="noreferrer" download={a.nome} className="attachment-card-file"><Icon name="doc" size={18} /><span>{a.nome}</span></a>}
+              <button className="icon-btn attachment-remove" title="Remover anexo" onClick={() => ctx.removeTaskAttachment(task.id, a.id)}><Icon name="x" size={11} /></button>
+            </div>
+          ))}
+        </div>
+      )}
+      <div className="attachment-dropzone" tabIndex={0} onPaste={(e) => pasteImageItems(e, addFile)}>
+        <Icon name="upload" size={15} />
+        <span>Clique aqui e pressione Ctrl+V para colar um print, ou{" "}
+          <button type="button" className="link-btn" onClick={() => fileRef.current && fileRef.current.click()}>escolha um arquivo</button>
+        </span>
+      </div>
+      <input ref={fileRef} type="file" multiple hidden onChange={(e) => { Array.from(e.target.files || []).forEach(addFile); e.target.value = ""; }} />
+    </div>
+  );
+}
+
+function CommentsBlock({ task, ctx }) {
+  const [texto, setTexto] = useState("");
+  const [pendentes, setPendentes] = useState([]);
+  const fileRef = useRef(null);
+  const comentarios = task.comentarios || [];
+
+  function addPendingImage(file) {
+    if (!file) return;
+    readAndCompressImage(file, 900, (dataUrl) => {
+      setPendentes((prev) => [...prev, { _id: "tmp" + Date.now() + Math.random(), nome: file.name || "print.jpg", tipo: "imagem", dataUrl }]);
+    });
+  }
+  function handleSubmit(e) {
+    e.preventDefault();
+    if (!texto.trim() && pendentes.length === 0) return;
+    ctx.addTaskComment(task.id, texto, pendentes.map(({ _id, ...rest }) => rest));
+    setTexto(""); setPendentes([]);
+  }
+
+  return (
+    <div className="field-block">
+      <span className="k">Comentários {comentarios.length > 0 && <span style={{ textTransform: "none", fontWeight: 500, color: "var(--text-muted)" }}>— {comentarios.length}</span>}</span>
+      {comentarios.length === 0 && <div style={{ fontSize: 12.5, color: "var(--text-muted)", marginBottom: 8 }}>Nenhum comentário ainda.</div>}
+      <div className="comment-list">
+        {comentarios.map((c) => (
+          <div className="comment-item" key={c.id}>
+            <div className="comment-item-head">
+              <PersonChip personKey={c.autor} />
+              <span className="comment-item-date">{fmtDate(c.data)} {c.hora}</span>
+              <button className="icon-btn" title="Excluir comentário" onClick={() => ctx.deleteTaskComment(task.id, c.id)}><Icon name="x" size={11} /></button>
+            </div>
+            {c.texto && <div className="comment-item-text">{c.texto}</div>}
+            {c.anexos && c.anexos.length > 0 && (
+              <div className="attachment-grid">
+                {c.anexos.map((a, i) => (
+                  <a key={i} href={a.dataUrl} target="_blank" rel="noreferrer" className="attachment-card"><img src={a.dataUrl} alt={a.nome} /></a>
+                ))}
+              </div>
+            )}
+          </div>
+        ))}
+      </div>
+      <form onSubmit={handleSubmit} style={{ marginTop: 8 }}>
+        <textarea placeholder="Escreva um comentário — cole um print com Ctrl+V…" value={texto} onChange={(e) => setTexto(e.target.value)}
+          onPaste={(e) => pasteImageItems(e, addPendingImage)} rows={2} style={{ ...fieldInputStyle, resize: "vertical" }} />
+        {pendentes.length > 0 && (
+          <div className="attachment-grid" style={{ marginTop: 6 }}>
+            {pendentes.map((a) => (
+              <div className="attachment-card" key={a._id}>
+                <img src={a.dataUrl} alt={a.nome} />
+                <button type="button" className="icon-btn attachment-remove" onClick={() => setPendentes((prev) => prev.filter((x) => x._id !== a._id))}><Icon name="x" size={11} /></button>
+              </div>
+            ))}
+          </div>
+        )}
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 6 }}>
+          <button type="button" className="btn btn-ghost btn-sm" onClick={() => fileRef.current && fileRef.current.click()}><Icon name="upload" size={12} /> Anexar print</button>
+          <button type="submit" className="btn btn-primary btn-sm">Comentar</button>
+        </div>
+        <input ref={fileRef} type="file" accept="image/*" multiple hidden onChange={(e) => { Array.from(e.target.files || []).forEach(addPendingImage); e.target.value = ""; }} />
+      </form>
+    </div>
+  );
+}
+
 function TaskDetail({ rec: t, ctx, onClose }) {
+  const project = t.projectId ? projectById(t.projectId) : null;
+  function handleDelete() {
+    if (!window.confirm("Excluir esta tarefa definitivamente? Essa ação não pode ser desfeita.")) return;
+    ctx.deleteTask(t.id);
+    onClose();
+  }
   return (
     <>
       <div className="field-grid">
@@ -5939,15 +6221,31 @@ function TaskDetail({ rec: t, ctx, onClose }) {
             {(ctx.listas.tarefa_status || []).filter((i) => i.ativo || i.id === t.status).map((i) => <option key={i.id} value={i.id}>{i.nome}</option>)}
           </select>
         </div>
-        <div className="field"><span className="k">Prioridade</span><span className={cx("v", "priority-tag", priorityClass(t.prioridade))}>{t.prioridade}</span></div>
+        <div className="field"><span className="k">Prioridade</span><PriorityBadge value={t.prioridade} /></div>
         <div className="field"><span className="k">Responsável</span><span className="v"><PersonChip personKey={t.responsavel} /></span></div>
         <div className="field"><span className="k">Prazo</span><span className="v mono">{t.prazo ? fmtDate(t.prazo) : "sem prazo"}</span></div>
+      </div>
+      <div className="field-block">
+        <span className="k">Vínculo</span>
+        <span className="v">{project
+          ? <Pill tone="neutral"><Icon name="layers" size={10} /> {project.nome}</Pill>
+          : <Pill tone="neutral"><Icon name="user" size={10} /> Pessoal</Pill>}</span>
       </div>
       {t.descricao && <div className="field-block"><span className="k">Descrição</span><span className="v">{t.descricao}</span></div>}
       {t.observacoes && <div className="field-block"><span className="k">Observações</span><span className="v">{t.observacoes}</span></div>}
       <OriginLine origem={t.origem} ctx={ctx} onClose={onClose} />
       <ChecklistBlock task={t} ctx={ctx} />
-      <div className="field-block"><span className="k">Criada em</span><span className="v mono">{fmtDate(t.criadoEm)}</span></div>
+      <AttachmentsBlock task={t} ctx={ctx} />
+      <CommentsBlock task={t} ctx={ctx} />
+      <div className="field-grid" style={{ marginTop: 4 }}>
+        <div className="field"><span className="k">Criada em</span><span className="v mono">{fmtDate(t.criadoEm)}</span></div>
+        <div className="field"><span className="k">Último status alterado em</span><span className="v mono">{t.statusAlteradoEm ? fmtDate(t.statusAlteradoEm) : "—"}</span></div>
+        {t.concluidoEm && <div className="field"><span className="k">Concluída em</span><span className="v mono">{fmtDate(t.concluidoEm)}</span></div>}
+      </div>
+      <div style={{ display: "flex", gap: 8, marginTop: 16 }}>
+        <button className="btn btn-ghost btn-sm" onClick={() => ctx.openTaskForm(t.projectId, t)}><Icon name="edit" size={13} /> Editar tarefa</button>
+        <button className="btn btn-danger-ghost btn-sm" onClick={handleDelete}><Icon name="trash" size={13} /> Excluir tarefa</button>
+      </div>
     </>
   );
 }
@@ -6482,7 +6780,7 @@ function ProjectFormModal({ data, ctx, onClose }) {
   const [empresaId, setEmpresaId] = useState(p ? (p.empresaId || "") : "");
   const [responsavel, setResponsavel] = useState(p ? p.responsavel : "clara");
   const [sponsor, setSponsor] = useState(p ? (p.sponsor || "") : "");
-  const [prioridade, setPrioridade] = useState(p ? p.prioridade : "Média");
+  const [prioridade, setPrioridade] = useState(priorityInfo(p ? p.prioridade : 2).valor);
   const [status, setStatus] = useState(p ? p.status : "Planejamento");
   const [saude, setSaude] = useState(p ? p.saude : "Saudável");
   const [dataInicio, setDataInicio] = useState(p ? p.dataInicio : TODAY);
@@ -6537,7 +6835,7 @@ function ProjectFormModal({ data, ctx, onClose }) {
                 </select>
               </div>
               <div className="field"><span className="k">Área</span><ConfigListSelect ctx={ctx} listId="projeto_area" value={area} onChange={setArea} allowEmpty emptyLabel="—" /></div>
-              <div className="field"><span className="k">Prioridade</span><ConfigListSelect ctx={ctx} listId="projeto_prioridade" value={prioridade} onChange={setPrioridade} /></div>
+              <div className="field"><span className="k">Prioridade</span><PrioritySelect value={prioridade} onChange={setPrioridade} /></div>
               <div className="field"><span className="k">Responsável</span><PersonSelect ctx={ctx} value={responsavel} onChange={setResponsavel} role="responsavel" /></div>
               <div className="field"><span className="k">Sponsor</span><PersonSelect ctx={ctx} value={sponsor} onChange={setSponsor} role="sponsor" allowEmpty emptyLabel="—" /></div>
               <div className="field"><span className="k">Status</span><ConfigListSelect ctx={ctx} listId="projeto_status" value={status} onChange={setStatus} /></div>
@@ -6910,6 +7208,72 @@ function RiskFormModal({ data, ctx, onClose }) {
           <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", padding: "14px 18px", borderTop: "1px solid var(--border)" }}>
             <button type="button" className="btn btn-ghost btn-sm" onClick={onClose}>Cancelar</button>
             <button type="submit" className="btn btn-primary btn-sm">{data.mode === "create" ? "Criar registro" : "Salvar alterações"}</button>
+          </div>
+        </form>
+      </div>
+    </div>
+  );
+}
+
+function TaskFormModal({ data, ctx, onClose }) {
+  const t = data.task;
+  const [projectId, setProjectId] = useState(data.projectId || (t && t.projectId) || "");
+  const [titulo, setTitulo] = useState(t ? t.titulo : "");
+  const [descricao, setDescricao] = useState(t ? (t.descricao || "") : "");
+  const [prioridade, setPrioridade] = useState(priorityInfo(t ? t.prioridade : 2).valor);
+  const [responsavel, setResponsavel] = useState(t ? t.responsavel : "clara");
+  const [status, setStatus] = useState(t ? t.status : "A fazer");
+  const [prazo, setPrazo] = useState(t ? (t.prazo || "") : "");
+  const [observacoes, setObservacoes] = useState(t ? (t.observacoes || "") : "");
+  const [error, setError] = useState("");
+
+  function handleSubmit(e) {
+    e.preventDefault();
+    if (!titulo.trim()) { setError("Preencha o título da tarefa."); return; }
+    const payload = { titulo: titulo.trim(), descricao, projectId: projectId || null, prioridade, responsavel, status, prazo: prazo || null, observacoes };
+    if (data.mode === "create") ctx.addTask(payload);
+    else ctx.updateTaskRecord(t.id, payload);
+    onClose();
+  }
+
+  return (
+    <div className="overlay modal-center" onClick={onClose}>
+      <div className="modal-box" onClick={(e) => e.stopPropagation()} style={{ width: "min(560px, 100%)" }}>
+        <div className="drawer-header">
+          <h2 style={{ fontSize: 15 }}>{data.mode === "create" ? "Nova tarefa" : "Editar tarefa"}</h2>
+          <button className="drawer-close" onClick={onClose}><Icon name="x" /></button>
+        </div>
+        <form onSubmit={handleSubmit}>
+          <div className="drawer-body" style={{ padding: 18, maxHeight: "70vh" }}>
+            <div className="field-block" style={{ margin: "0 0 12px" }}>
+              <span className="k">Título</span>
+              <input type="text" value={titulo} onChange={(e) => setTitulo(e.target.value)} autoFocus style={fieldInputStyle} />
+            </div>
+            <div className="field-block" style={{ margin: "0 0 12px" }}>
+              <span className="k">Descrição</span>
+              <textarea value={descricao} onChange={(e) => setDescricao(e.target.value)} rows={2} style={{ ...fieldInputStyle, resize: "vertical" }} />
+            </div>
+            <div className="field-grid">
+              <div className="field"><span className="k">Projeto</span>
+                <select value={projectId} onChange={(e) => setProjectId(e.target.value)} style={fieldInputStyle}>
+                  <option value="">Sem projeto (pessoal)</option>
+                  {ctx.projects.filter((p) => !p.arquivado || p.id === projectId).map((p) => <option key={p.id} value={p.id}>{p.nome}</option>)}
+                </select>
+              </div>
+              <div className="field"><span className="k">Prioridade</span><PrioritySelect value={prioridade} onChange={setPrioridade} /></div>
+              <div className="field"><span className="k">Responsável</span><PersonSelect ctx={ctx} value={responsavel} onChange={setResponsavel} role="responsavel" /></div>
+              <div className="field"><span className="k">Status</span><ConfigListSelect ctx={ctx} listId="tarefa_status" value={status} onChange={setStatus} /></div>
+              <div className="field"><span className="k">Prazo</span><input type="date" value={prazo} onChange={(e) => setPrazo(e.target.value)} style={fieldInputStyle} /></div>
+            </div>
+            <div className="field-block" style={{ margin: "12px 0 0" }}>
+              <span className="k">Observações</span>
+              <textarea value={observacoes} onChange={(e) => setObservacoes(e.target.value)} rows={2} style={{ ...fieldInputStyle, resize: "vertical" }} />
+            </div>
+            {error && <div className="stale-alert" style={{ marginTop: 12 }}><Icon name="alert" size={12} /> {error}</div>}
+          </div>
+          <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", padding: "14px 18px", borderTop: "1px solid var(--border)" }}>
+            <button type="button" className="btn btn-ghost btn-sm" onClick={onClose}>Cancelar</button>
+            <button type="submit" className="btn btn-primary btn-sm">{data.mode === "create" ? "Criar tarefa" : "Salvar alterações"}</button>
           </div>
         </form>
       </div>
