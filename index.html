@@ -809,6 +809,20 @@ table.data-table tbody tr:last-child td { border-bottom: none; }
 .comment-item-date { font-size: 11px; color: var(--text-muted); flex: 1; }
 .comment-item-text { font-size: 13px; color: var(--text-primary); margin-top: 4px; white-space: pre-wrap; }
 
+/* seletor de conta do Google Picker (Documentos / pasta do projeto) */
+.drive-picker-btn { position: relative; display: inline-block; }
+.drive-account-chooser {
+  position: absolute; top: calc(100% + 4px); left: 0; z-index: 40; min-width: 200px;
+  background: var(--surface-raised); border: 1px solid var(--border); border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-md); padding: 6px; display: flex; flex-direction: column; gap: 2px;
+}
+.drive-account-chooser-label { font-size: 10.5px; text-transform: uppercase; letter-spacing: .04em; color: var(--text-muted); font-weight: 700; padding: 4px 8px 2px; }
+.drive-account-chooser button {
+  text-align: left; background: none; border: none; padding: 7px 8px; border-radius: 6px; font-size: 12.5px;
+  color: var(--text-primary); cursor: pointer; font-family: inherit;
+}
+.drive-account-chooser button:hover { background: var(--surface-sunken); }
+
 /* botão global "+ Novo" */
 .fab-new {
   position: fixed; bottom: 26px; right: 28px; width: 54px; height: 54px; border-radius: 50%;
@@ -907,6 +921,7 @@ table.data-table tbody tr:last-child td { border-bottom: none; }
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/mammoth/1.12.2/mammoth.browser.min.js"></script>
 <script src="https://accounts.google.com/gsi/client" async defer></script>
+<script src="https://apis.google.com/js/api.js" async defer></script>
 
 <script type="text/babel" data-presets="react">
 /* ==========================================================================
@@ -933,6 +948,11 @@ const TODAY = todayIso();
    falta configurar, em vez de travar ou dar erro confuso. */
 const GOOGLE_CLIENT_ID = "394531176143-69mtdn1qcnpmuvib4fuggjcjfd7m41ak.apps.googleusercontent.com";
 const GOOGLE_DRIVE_SCOPE = "https://www.googleapis.com/auth/drive.file";
+/* Chave de API do Google (Google Cloud Console > Credenciais > Criar credenciais > Chave de API),
+   separada do Client ID acima — exigida pelo Google Picker para abrir o seletor de arquivos/pastas
+   do Drive usado em Documentos (ver GUIA-CONFIGURACAO.md, Parte 9). Enquanto não for substituída, o
+   botão de selecionar do Drive mostra um aviso em vez de tentar abrir o Picker. */
+const GOOGLE_PICKER_API_KEY = "COLE_AQUI_SUA_API_KEY";
 const DRIVE_DATA_FILENAME = "central-projetos-dados.json";
 
 /* --------------------- contas Google conectadas (Fase 2) ---------------------
@@ -1130,7 +1150,7 @@ const TABS = [
   { key: "tarefas", label: "Tarefas" },
   { key: "reunioes", label: "Reuniões" },
   { key: "notas", label: "Notas" },
-  { key: "materiais", label: "Materiais" },
+  { key: "materiais", label: "Documentos" },
   { key: "cronograma", label: "Cronograma" },
   { key: "diario", label: "Diário" },
 ];
@@ -1386,6 +1406,39 @@ function PersonSelect({ ctx, value, onChange, role, allowEmpty, emptyLabel = "�
   );
 }
 
+/* Botão para escolher um arquivo ("file") ou pasta ("folder") do Google Drive via Picker, numa das
+   contas conectadas (conta de dados da Central + contas adicionais com Drive ativo). Quando há mais
+   de uma conta disponível, mostra um pequeno seletor antes de abrir o Picker — nunca assume qual
+   conta usar. startFolder (opcional) = {accountId, id} do projeto: se a conta escolhida for a mesma
+   dona da pasta, o Picker já abre navegando a partir dela. */
+function DrivePickerButton({ ctx, mode = "file", startFolder, onPick, label }) {
+  const [showChooser, setShowChooser] = useState(false);
+  const contas = [
+    { id: null, label: "Conta de dados da Central" },
+    ...ctx.googleAccounts.filter((a) => a.usaDrive).map((a) => ({ id: a.id, label: a.apelido || a.email })),
+  ];
+
+  function escolher(accountId) {
+    setShowChooser(false);
+    const startFolderId = startFolder && startFolder.accountId === accountId ? startFolder.id : undefined;
+    ctx.openDrivePicker({ accountId, mode, startFolderId, onPick });
+  }
+
+  return (
+    <div className="drive-picker-btn">
+      <button type="button" className="btn btn-ghost btn-sm" onClick={() => contas.length > 1 ? setShowChooser((v) => !v) : escolher(null)}>
+        <Icon name="link" size={13} /> {label}
+      </button>
+      {showChooser && (
+        <div className="drive-account-chooser">
+          <div className="drive-account-chooser-label">Escolha a conta</div>
+          {contas.map((c) => <button type="button" key={c.id || "central"} onClick={() => escolher(c.id)}>{c.label}</button>)}
+        </div>
+      )}
+    </div>
+  );
+}
+
 /* ==================================================================================
    EXPORTAÇÃO DE NOTAS PARA WORD (.docx gerado no navegador, via JSZip)
    ================================================================================== */
@@ -1596,6 +1649,7 @@ function App() {
   /* ---- login com Google e acesso ao Drive pessoal (substitui a capacidade "db" do Artifact) ---- */
   const tokenClientRef = useRef(null);
   const accessTokenRef = useRef(null);
+  const pickerLoadedRef = useRef(false); // true assim que window.gapi.load("picker", ...) termina
   const driveFileIdRef = useRef(null);
   const driveStateRef = useRef(null); // espelho em memória do arquivo único de dados no Drive
   const driveSaveTimerRef = useRef(null);
@@ -1642,6 +1696,67 @@ function App() {
     tick();
     return () => { cancelled = true; };
   }, []);
+
+  /* Carrega a biblioteca do Google Picker (usada em Documentos, para selecionar arquivo/pasta do
+     Drive) em segundo plano, assim que a chave de API estiver configurada — sem chave, nem tenta,
+     e o botão de selecionar do Drive mostra um aviso em vez de travar esperando algo que não vai
+     carregar. */
+  useEffect(() => {
+    if (GOOGLE_PICKER_API_KEY.indexOf("COLE_AQUI") === 0) return;
+    let cancelled = false;
+    let tries = 0;
+    const tick = () => {
+      if (cancelled) return;
+      if (window.gapi && window.gapi.load) {
+        window.gapi.load("picker", () => { pickerLoadedRef.current = true; });
+        return;
+      }
+      tries += 1;
+      if (tries > 100) return; // ~20s sem o script do Google carregar — Picker fica indisponível nesta sessão
+      setTimeout(tick, 200);
+    };
+    tick();
+    return () => { cancelled = true; };
+  }, []);
+
+  /* Abre o Google Picker para escolher um arquivo ("file") ou uma pasta ("folder") do Drive de uma
+     das contas conectadas (accountId null = conta de dados da Central). Usa sempre o token da conta
+     escolhida — nunca mistura contas — e nunca guarda nada além do que já fica em memória por conta
+     (ver googleAccountTokensRef). O resultado devolvido a onPick é só {id, nome, link, mimeType} do
+     item escolhido — o próprio Drive continua sendo o dono do arquivo; a Central guarda só o link. */
+  function openDrivePicker({ accountId, mode, startFolderId, onPick }) {
+    if (GOOGLE_PICKER_API_KEY.indexOf("COLE_AQUI") === 0) {
+      setToast("Google Picker não configurado — veja o Guia de Configuração, Parte 9.");
+      return;
+    }
+    if (!pickerLoadedRef.current || !window.google || !window.google.picker) {
+      setToast("O Google Picker ainda está carregando — tente de novo em alguns segundos.");
+      return;
+    }
+    const token = accountId
+      ? (googleAccountTokensRef.current[accountId] && googleAccountTokensRef.current[accountId].accessToken)
+      : accessTokenRef.current;
+    if (!token) {
+      setToast("Essa conta não está conectada nesta sessão — reconecte em Configurações > Contas Google.");
+      return;
+    }
+    const view = mode === "folder"
+      ? new window.google.picker.DocsView(window.google.picker.ViewId.FOLDERS).setSelectFolderEnabled(true).setIncludeFolders(true)
+      : new window.google.picker.DocsView(window.google.picker.ViewId.DOCS).setIncludeFolders(true).setSelectFolderEnabled(false);
+    if (startFolderId) view.setParent(startFolderId);
+    const picker = new window.google.picker.PickerBuilder()
+      .addView(view)
+      .setOAuthToken(token)
+      .setDeveloperKey(GOOGLE_PICKER_API_KEY)
+      .setCallback((data) => {
+        if (data.action === window.google.picker.Action.PICKED) {
+          const doc = data.docs[0];
+          onPick({ id: doc.id, nome: doc.name, link: doc.url, mimeType: doc.mimeType }, accountId || null);
+        }
+      })
+      .build();
+    picker.setVisible(true);
+  }
 
   /* Tenta reconectar sem mostrar nenhuma tela do Google, reaproveitando a sessão do Google já
      aberta no navegador e o consentimento já dado antes (prompt "" = silencioso, sem popup de
@@ -2576,20 +2691,21 @@ function App() {
   }
 
   /* --------------------------------- materiais --------------------------------- */
-  function addDocument({ projectId, nome, categoria, classificacao, link, descricao }) {
+  function addDocument({ projectId, nome, categoria, classificacao, link, descricao, driveAccountId, driveFileId }) {
     const id = "doc" + (Date.now() % 100000) + Math.floor(Math.random() * 99);
     const rec = {
-      id, nome: (nome || "").trim() || "Material sem título", projectId,
+      id, nome: (nome || "").trim() || "Documento sem título", projectId,
       categoria: categoria || "Material de apoio", classificacao: classificacao || "Material de apoio",
       versao: "—", data: TODAY, responsavelOrigem: "clara", descricao: descricao || "",
       link: (link || "").trim(), registrosRelacionados: [],
+      driveAccountId: driveAccountId || null, driveFileId: driveFileId || null,
     };
     setDocuments((prev) => [rec, ...prev]);
     persistDoc("documents", id, rec);
     if (rec.projectId) {
       addDiaryEntry({
         projectId: rec.projectId, data: TODAY, hora: "", tipo: "documento",
-        titulo: "Material incluído — " + rec.nome, descricao: "Material adicionado à aba Materiais do projeto.",
+        titulo: "Documento incluído — " + rec.nome, descricao: "Documento adicionado à aba Documentos do projeto.",
         relacionado: { tipo: "documento", id },
       });
     }
@@ -3070,7 +3186,7 @@ function App() {
     authStatus, signInWithGoogle, signOutGoogle, setToast,
     googleAccounts, googleAccountStatus, googleAccountError, googleCalendarsByAccount, googleEvents, googleEventsSyncStatus, googleEventLinks,
     connectGoogleAccount, reconnectGoogleAccount, disconnectGoogleAccount, removeGoogleAccount, updateGoogleAccountCalendarios,
-    syncGoogleAgenda, linkGoogleEventToProject, importGoogleEventAsMeeting };
+    syncGoogleAgenda, linkGoogleEventToProject, importGoogleEventAsMeeting, openDrivePicker };
 
   if (authStatus !== "logado") {
     return (
@@ -3263,7 +3379,7 @@ function Topbar({ route, navigate, setSidebarOpen, searchQuery, setSearchQuery, 
     searchResults.forEach((r) => { (groups[r.type] = groups[r.type] || []).push(r); });
     return groups;
   }, [searchResults]);
-  const TYPE_LABELS = { projeto: "Projetos", reuniao: "Reuniões", decisao: "Decisões", pendencia: "Pendências", documento: "Materiais", tarefa: "Tarefas", diario: "Diário", risco: "Riscos", mudanca: "Mudanças", marco: "Marcos", nota: "Notas", lembrete: "Lembretes" };
+  const TYPE_LABELS = { projeto: "Projetos", reuniao: "Reuniões", decisao: "Decisões", pendencia: "Pendências", documento: "Documentos", tarefa: "Tarefas", diario: "Diário", risco: "Riscos", mudanca: "Mudanças", marco: "Marcos", nota: "Notas", lembrete: "Lembretes" };
 
   function selectResult(r) {
     setSearchFocused(false);
@@ -3871,6 +3987,15 @@ function VisaoGeralTab({ project, ctx, setTab }) {
                 <span className="v">{project.observacoes}</span>
               </div>
             )}
+            <div className="field-block" style={{ margin: "12px 0 0" }}>
+              <span className="k">Pasta no Drive</span>
+              <span className="v" style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                {project.pastaDrive && <a href={project.pastaDrive.link} target="_blank" rel="noreferrer"><Icon name="external" size={12} /> {project.pastaDrive.nome}</a>}
+                <DrivePickerButton ctx={ctx} mode="folder"
+                  onPick={(doc, accountId) => ctx.updateProject(project.id, { pastaDrive: { accountId, id: doc.id, nome: doc.nome, link: doc.link } })}
+                  label={project.pastaDrive ? "Trocar pasta" : "Selecionar pasta no Drive"} />
+              </span>
+            </div>
           </div>
 
           {(dependeDe.length > 0 || dependenciaPara.length > 0) && (
@@ -4147,18 +4272,24 @@ function MateriaisTab({ project, ctx }) {
     ctx.addDocument({ projectId: project.id, nome, categoria: tipoMaterial, classificacao, link });
     setNome(""); setLink("");
   }
+  function handlePickFile(doc, accountId) {
+    ctx.addDocument({ projectId: project.id, nome: doc.nome, categoria: tipoMaterial, classificacao, link: doc.link, driveAccountId: accountId, driveFileId: doc.id });
+  }
 
   return (
     <div>
-      <div className="section-head"><h2>Materiais</h2><span className="hint">PRDs, atas, apresentações, planilhas, links e demais referências reunidas para o projeto</span></div>
+      <div className="section-head"><h2>Documentos</h2><span className="hint">PRDs, atas, apresentações, planilhas, links e demais referências reunidas para o projeto</span></div>
 
       <form className="quick-add" onSubmit={handleAdd} style={{ flexWrap: "wrap" }}>
-        <input type="text" placeholder="Nome do material" value={nome} onChange={(e) => setNome(e.target.value)} style={{ flex: "1 1 200px" }} />
+        <input type="text" placeholder="Nome do documento" value={nome} onChange={(e) => setNome(e.target.value)} style={{ flex: "1 1 200px" }} />
         <ConfigListSelect ctx={ctx} listId="material_tipo" value={tipoMaterial} onChange={setTipoMaterial} allowEmpty emptyLabel="Tipo…" style={{}} />
         <ConfigListSelect ctx={ctx} listId="material_classificacao" value={classificacao} onChange={setClassificacao} style={{}} />
         <input type="text" placeholder="Link (https://…)" value={link} onChange={(e) => setLink(e.target.value)} style={{ flex: "1 1 200px" }} />
-        <button type="submit" className="btn btn-primary btn-sm">Adicionar material</button>
+        <button type="submit" className="btn btn-primary btn-sm">Adicionar documento</button>
       </form>
+      <div style={{ margin: "0 0 14px" }}>
+        <DrivePickerButton ctx={ctx} mode="file" startFolder={project.pastaDrive} onPick={handlePickFile} label="Selecionar do Google Drive" />
+      </div>
 
       <div className="diary-filter-chips">
         <span className={cx("chip", cat === "Todas" && "active")} onClick={() => setCat("Todas")}>Todos os tipos</span>
@@ -4170,7 +4301,7 @@ function MateriaisTab({ project, ctx }) {
       </div>
 
       <div className="list-stack">
-        {list.length === 0 && <EmptyState text="Nenhum material para este filtro." />}
+        {list.length === 0 && <EmptyState text="Nenhum documento para este filtro." />}
         {list.map((d) => (
           <div className="item-row" key={d.id} onClick={() => ctx.openDrawer("documento", d.id)}>
             <span className="feed-icon tone-neutral" style={{ marginTop: 1 }}><Icon name="doc" size={14} /></span>
@@ -4697,7 +4828,7 @@ function NotasTab({ project, ctx, setTab }) {
       </div>
       <p className="hint" style={{ marginTop: 4 }}>
         Documentos, links e outras referências de levantamento ficam na aba{" "}
-        <a onClick={() => setTab && setTab("materiais")} style={{ cursor: "pointer" }}>Materiais</a>.
+        <a onClick={() => setTab && setTab("materiais")} style={{ cursor: "pointer" }}>Documentos</a>.
       </p>
     </div>
   );
@@ -5126,7 +5257,7 @@ function NoteEditorView({ route, ctx, navigate }) {
 
       {availableDocs.length > 0 && (
         <div className="note-editor-materiais">
-          <div className="note-editor-materiais-label">Materiais relacionados (opcional)</div>
+          <div className="note-editor-materiais-label">Documentos relacionados (opcional)</div>
           {availableDocs.map((d) => (
             <span key={d.id} className={cx("material-chip", materiais.includes(d.id) && "active")} onClick={() => toggleMaterial(d.id)}>
               <Icon name="doc" size={11} /> {d.nome}
@@ -5242,7 +5373,7 @@ function BackupView({ ctx }) {
     "Projetos": ctx.projects.length, "Marcos": ctx.milestones.length,
     "Tarefas": ctx.tasks.length, "Reuniões": ctx.meetings.length, "Decisões": ctx.decisions.length,
     "Pendências": ctx.pendencies.length, "Riscos/problemas/impedimentos": ctx.risks.length, "Mudanças": ctx.changes.length,
-    "Diário": ctx.diary.length, "Notas": ctx.notes.length, "Lembretes": ctx.reminders.length, "Materiais": ctx.documents.length,
+    "Diário": ctx.diary.length, "Notas": ctx.notes.length, "Lembretes": ctx.reminders.length, "Documentos": ctx.documents.length,
   };
 
   function handleFile(e) {
@@ -5261,7 +5392,7 @@ function BackupView({ ctx }) {
           Projetos: parsed.data.projetos, Marcos: parsed.data.marcos,
           Tarefas: parsed.data.tasks, Reuniões: parsed.data.meetings, Decisões: parsed.data.decisions,
           Pendências: parsed.data.pendencies, "Riscos/problemas/impedimentos": parsed.data.risks, Mudanças: parsed.data.changes,
-          Diário: parsed.data.diary, Notas: parsed.data.notes, Lembretes: parsed.data.reminders, Materiais: parsed.data.documents,
+          Diário: parsed.data.diary, Notas: parsed.data.notes, Lembretes: parsed.data.reminders, Documentos: parsed.data.documents,
         }).map(([label, arr]) => [label, Array.isArray(arr) ? arr.length : 0]);
         setPending({ parsed, resumo });
       } catch (err) {
@@ -5694,8 +5825,8 @@ function ConfigContasGoogleTab({ ctx }) {
       <div className="card" style={{ padding: 18, marginTop: 16 }}>
         <div style={{ fontWeight: 700, fontSize: 13.5, marginBottom: 8 }}>O que ainda não está nesta versão</div>
         <p className="hint" style={{ margin: 0 }}>
-          Escolher conta e pasta por arquivo ao salvar Materiais (Google Picker), Google Meet, atas e transcrições
-          automáticas, upload real de Materiais e exportação em ZIP continuam sendo evoluções planejadas para
+          Google Meet, atas e transcrições automáticas a partir de reuniões do Google Agenda, upload real de arquivo
+          (fora do Google Picker, na aba Documentos) e exportação em ZIP continuam sendo evoluções planejadas para
           próximas rodadas — nada disso está implementado nem simulado nesta versão.
         </p>
       </div>
@@ -5925,7 +6056,7 @@ function ItemDrawer({ item, onClose, ctx }) {
   );
 }
 
-const TYPE_TITLES = { tarefa: "Tarefa", decisao: "Decisão", pendencia: "Pendência", risco: "Risco / Problema / Impedimento", mudanca: "Mudança", documento: "Material", marco: "Marco do cronograma" };
+const TYPE_TITLES = { tarefa: "Tarefa", decisao: "Decisão", pendencia: "Pendência", risco: "Risco / Problema / Impedimento", mudanca: "Mudança", documento: "Documento", marco: "Marco do cronograma" };
 
 function GenericDrawerContent({ type, id, onClose, ctx }) {
   const collectionMap = { tarefa: ctx.tasks, decisao: ctx.decisions, pendencia: ctx.pendencies, risco: ctx.risks, mudanca: ctx.changes, documento: ctx.documents, marco: ctx.milestones };
@@ -6372,10 +6503,11 @@ function ChangeDetail({ rec: c, ctx, onClose }) {
 }
 
 function MaterialDetail({ rec: d, ctx, onClose }) {
+  const contaOrigem = d.driveAccountId ? ctx.googleAccounts.find((a) => a.id === d.driveAccountId) : null;
   return (
     <>
       <div className="field-grid">
-        <div className="field"><span className="k">Tipo de material</span><span className="v"><Pill tone="neutral">{d.categoria}</Pill></span></div>
+        <div className="field"><span className="k">Tipo de documento</span><span className="v"><Pill tone="neutral">{d.categoria}</Pill></span></div>
         <div className="field"><span className="k">Classificação</span><span className="v"><Pill tone={d.classificacao === "Documento oficial" ? "info" : "accent"}>{d.classificacao || "—"}</Pill></span></div>
         <div className="field"><span className="k">Versão</span><span className="v mono">{d.versao}</span></div>
         <div className="field"><span className="k">Data</span><span className="v mono">{fmtDate(d.data)}</span></div>
@@ -6383,13 +6515,18 @@ function MaterialDetail({ rec: d, ctx, onClose }) {
       </div>
       {d.descricao && <div className="field-block"><span className="k">Descrição</span><span className="v">{d.descricao}</span></div>}
       {d.link && <div className="field-block"><span className="k">Link</span><span className="v"><a href={d.link} target="_blank" rel="noreferrer">{d.link} <Icon name="external" size={12} /></a></span></div>}
+      {d.driveFileId && (
+        <div className="field-block"><span className="k">Selecionado do Google Drive</span>
+          <span className="v">{contaOrigem ? (contaOrigem.apelido || contaOrigem.email) : "Conta de dados da Central"}</span>
+        </div>
+      )}
       {d.registrosRelacionados && d.registrosRelacionados.length > 0 && (
         <div className="field-block"><span className="k">Registros relacionados</span>
           <div className="subrecord-chip-list">{d.registrosRelacionados.map((rr, i) => <span key={i} className="subrecord-chip" onClick={() => ctx.goToRecord(rr.tipo, rr.id)}>{ORIGEM_LABEL[rr.tipo] || rr.tipo}</span>)}</div>
         </div>
       )}
       <div style={{ marginTop: 14 }}>
-        <button className="btn btn-danger-ghost btn-sm" onClick={() => { ctx.deleteDocument(d.id); onClose(); }}>Excluir material</button>
+        <button className="btn btn-danger-ghost btn-sm" onClick={() => { ctx.deleteDocument(d.id); onClose(); }}>Excluir documento</button>
       </div>
     </>
   );
@@ -6663,7 +6800,7 @@ const NEW_ITEM_TYPES = [
   { key: "pendencia", label: "Pendência", icon: "clock", geral: false },
   { key: "decisao", label: "Decisão", icon: "flag", geral: false },
   { key: "risco", label: "Risco / Problema / Impedimento", icon: "alert", geral: false },
-  { key: "material", label: "Material", icon: "doc", geral: false },
+  { key: "material", label: "Documento", icon: "doc", geral: false },
 ];
 
 function NewItemButton({ ctx }) {
@@ -6730,7 +6867,7 @@ function NewItemForm({ tipo, ctx, contextProjectId, onBack, onDone }) {
   function handleSubmit(e) {
     e.preventDefault();
     setError("");
-    if (!titulo.trim()) { setError(tipo === "material" ? "Preencha o nome do material." : "Preencha o título."); return; }
+    if (!titulo.trim()) { setError(tipo === "material" ? "Preencha o nome do documento." : "Preencha o título."); return; }
     if (!typeInfo.geral && !projectId) { setError("Selecione um projeto — este tipo de registro exige um projeto."); return; }
     const pid = projectId || null;
     if (tipo === "tarefa") ctx.addTask({ titulo, projectId: pid, prazo: prazo || null });
@@ -6743,7 +6880,7 @@ function NewItemForm({ tipo, ctx, contextProjectId, onBack, onDone }) {
   return (
     <form onSubmit={handleSubmit}>
       <div className="field-block" style={{ margin: "0 0 12px" }}>
-        <span className="k">{tipo === "reuniao" ? "Título da reunião" : tipo === "lembrete" ? "Texto do lembrete" : tipo === "material" ? "Nome do material" : "Título"}</span>
+        <span className="k">{tipo === "reuniao" ? "Título da reunião" : tipo === "lembrete" ? "Texto do lembrete" : tipo === "material" ? "Nome do documento" : "Título"}</span>
         <input type="text" value={titulo} onChange={(e) => setTitulo(e.target.value)} autoFocus
           style={{ width: "100%", padding: "7px 9px", borderRadius: 6, border: "1px solid var(--border)", background: "var(--surface)", fontFamily: "inherit", fontSize: 13 }} />
       </div>
@@ -7431,8 +7568,8 @@ function ImportarWordModal({ ctx, projectId, onClose }) {
               </div>
               <p className="hint" style={{ margin: "6px 0 0" }}>
                 O arquivo .docx original não é enviado nem armazenado — apenas o conteúdo é importado como anotação
-                na Central. Guardar o arquivo original em Materiais (com escolha de conta e pasta no Drive) é uma
-                evolução prevista para uma próxima fase.
+                na Central. Fazer upload do arquivo original para Documentos (em vez de só linkar um arquivo já
+                existente no Drive) é uma evolução prevista para uma próxima fase.
               </p>
             </>
           )}
@@ -7523,7 +7660,7 @@ function QuickListRow({ item, ctx, onClose }) {
 /* ==================================================================================
    BUSCA GERAL (visão completa)
    ================================================================================== */
-const SEARCH_TYPE_LABELS = { projeto: "Projetos", reuniao: "Reuniões", decisao: "Decisões", pendencia: "Pendências", documento: "Materiais", tarefa: "Tarefas", diario: "Diário", risco: "Riscos", mudanca: "Mudanças", marco: "Marcos", nota: "Notas", lembrete: "Lembretes" };
+const SEARCH_TYPE_LABELS = { projeto: "Projetos", reuniao: "Reuniões", decisao: "Decisões", pendencia: "Pendências", documento: "Documentos", tarefa: "Tarefas", diario: "Diário", risco: "Riscos", mudanca: "Mudanças", marco: "Marcos", nota: "Notas", lembrete: "Lembretes" };
 const SEARCH_TYPE_ICON = { projeto: "layers", reuniao: "users", decisao: "flag", pendencia: "clock", documento: "doc", tarefa: "check", diario: "book", risco: "alert", mudanca: "refresh", marco: "flag", nota: "book", lembrete: "bell" };
 
 function SearchView({ query, results, goToRecord, setSearchQuery, navigate }) {

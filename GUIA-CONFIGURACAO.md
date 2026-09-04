@@ -74,6 +74,21 @@ Só é necessária se você quiser conectar contas Google adicionais (pessoal, p
 
 **Atenção:** o escopo de Google Drive pedido às contas adicionais é o mesmo da conta de dados da Central (`drive.file` — acesso só aos arquivos criados pelo próprio app). Nenhuma conta recebe acesso ao Google Drive inteiro.
 
+## Parte 9 — Google Picker (Documentos por projeto)
+
+Só é necessária se você quiser usar o botão "Selecionar do Google Drive" na aba Documentos de um projeto, ou escolher a pasta do Drive de um projeto. Sem isso, a aba Documentos continua funcionando normalmente pelo formulário manual (nome + link colado à mão).
+
+1. No mesmo projeto do Google Cloud usado na Parte 2, ir em APIs e Serviços > Biblioteca, procurar **Google Picker API** e clicar em Ativar.
+2. Ir em APIs e Serviços > Credenciais > Criar credenciais > **Chave de API**.
+3. Clicar em "Restringir chave" (recomendado, evita uso indevido da chave por outro site):
+   - Restrições de aplicativo: **Referenciadores HTTP (sites)** — adicionar a URL do seu GitHub Pages, no formato `https://SEUUSUARIO.github.io/*` (com o `/*` no final, para cobrir qualquer caminho dentro do seu usuário).
+   - Restrições de API: escolher **Restringir chave**, marcar **Google Picker API**.
+4. Copiar a chave gerada.
+5. Abrir o `index.html`, localizar `const GOOGLE_PICKER_API_KEY = "COLE_AQUI_SUA_API_KEY";` e substituir pela chave copiada, mantendo as aspas.
+6. Salvar e subir a versão atualizada para o GitHub.
+
+**Como funciona:** o Picker abre o Drive da conta que você escolher (a conta de dados da Central, ou qualquer conta adicional conectada com Google Drive ativo — ver Parte 8) e devolve só o link do arquivo ou pasta escolhida; a Central nunca baixa nem guarda o conteúdo do arquivo em si, só o link para abri-lo depois. Combinado com o escopo `drive.file` já usado em todo o app, o Picker é o mecanismo que o próprio Google recomenda para dar acesso a um arquivo específico sem pedir acesso ao Drive inteiro.
+
 ## Novidades desta rodada (Fase 1)
 
 Esta rodada tornou a aplicação administrável, sem exigir nenhuma configuração adicional no Google Cloud:
@@ -95,8 +110,20 @@ Esta rodada conecta contas Google adicionais para Google Drive e Google Agenda, 
 - **Detalhe do evento do Google Agenda**: clicar em um evento do Google mostra data, horário, conta, calendário, organizador, participantes, local e descrição, além de links para abrir no Google Agenda e no Google Meet (quando houver). Duas ações ficam disponíveis: vincular o evento a um projeto da Central, e importar o evento como reunião (usando título, data e horário do próprio evento) — importar o mesmo evento de novo não duplica a reunião.
 - **Isolamento entre contas:** uma falha ao conectar, reconectar ou sincronizar uma conta adicional nunca afeta a conta de dados da Central nem as outras contas conectadas — cada conta tem seu próprio status e sua própria mensagem de erro, quando houver.
 
+## Novidades desta rodada (Fase 3)
+
+- **Documentos** (antes "Materiais"): mesma aba, agora com um botão "Selecionar do Google Drive" que abre o Google Picker (ver Parte 9) para escolher um arquivo do Drive de qualquer conta conectada — o nome e o link entram automaticamente, sem digitar nada.
+- **Pasta do projeto no Drive**: em Visão Geral, cada projeto pode ter uma pasta do Drive associada (escolhida pelo mesmo Picker) — um clique abre a pasta, e o Picker de Documentos já começa navegando a partir dela quando a mesma conta é escolhida.
+- **Decisões, Pendências, Riscos e Mudanças** deixaram de ser abas próprias do projeto — agora aparecem como categorias dentro da própria Visão Geral, junto com o resumo do projeto e o cronograma.
+- **Diário** passou a ser a última aba do projeto.
+- **Prioridade de Tarefas e Projetos**: passou de lista de texto (Alta/Média/Baixa) para uma escala numérica fixa P0–P3 (P0 = crítica/pra ontem, P3 = sem prioridade), com uma cor por nível.
+- **Tarefas**: agora têm edição completa, exclusão, comentários (com opção de colar prints via Ctrl+V) e anexos próprios da tarefa, além de filtro por status e datas de criação/última mudança de status/conclusão visíveis no detalhe.
+- **Login do Google**: a reconexão agora tenta primeiro um modo silencioso (sem tela de escolha de conta nem de permissões) antes de pedir a tela cheia — ainda é preciso um clique por carregamento de página, mas normalmente sem a tela pesada do Google no meio.
+
 ## Limitações
 
 O login expira periodicamente; ao acontecer, a aplicação mostra "Sessão Google expirada. Entre novamente para continuar." sem apagar dados. Enquanto o app estiver em modo Testing, só as contas cadastradas como usuário de teste conseguem entrar — comportamento correto para uso pessoal.
 
-**Limitações específicas desta rodada (Fase 2):** as contas Google adicionais (Drive e/ou Agenda) precisam ser reconectadas a cada nova sessão no navegador — os tokens não são persistidos, de propósito, por segurança (ver Parte 8). Escolher conta e pasta por arquivo ao salvar Materiais (Google Picker), Google Meet, atas e transcrições automáticas a partir de reuniões do Google Agenda, upload real de Materiais, central de documentos por projeto e exportação em ZIP continuam sendo evoluções planejadas para próximas rodadas e **não estão implementados nem simulados** nesta versão. A importação de Word não salva o arquivo `.docx` original — apenas o conteúdo convertido.
+**Limitações específicas desta rodada (Fase 2):** as contas Google adicionais (Drive e/ou Agenda) precisam ser reconectadas a cada nova sessão no navegador — os tokens não são persistidos, de propósito, por segurança (ver Parte 8).
+
+**Limitações específicas desta rodada (Fase 3):** Google Meet, atas e transcrições automáticas a partir de reuniões do Google Agenda, upload real de arquivo (fora do Picker) e exportação em ZIP continuam sendo evoluções planejadas para próximas rodadas e **não estão implementadas nem simuladas** nesta versão. O Picker de Documentos exige a chave de API da Parte 9 configurada — sem ela, o botão "Selecionar do Google Drive" mostra um aviso em vez do seletor. A importação de Word não salva o arquivo `.docx` original — apenas o conteúdo convertido.
