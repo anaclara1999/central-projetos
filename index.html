@@ -323,6 +323,8 @@ a:hover { text-decoration: underline; }
 .kpi-tile.tone-warning .kpi-tile-value { color: var(--warning); }
 .kpi-tile.tone-accent .kpi-tile-value { color: var(--accent-strong); }
 .kpi-tile.tone-info .kpi-tile-value { color: var(--info); }
+.kpi-tile.tone-success .kpi-tile-value { color: var(--success); }
+.kpi-tile.tone-neutral .kpi-tile-value { color: var(--neutral); }
 
 .mini-stats-row { display: flex; gap: 18px; margin: -10px 0 20px; flex-wrap: wrap; }
 .mini-stat { font-size: 12.5px; color: var(--text-secondary); display: flex; align-items: center; gap: 6px; }
@@ -3763,11 +3765,23 @@ function MinhaCentralView({ ctx }) {
     { key: "concluidas", label: "Concluídas recentemente", icon: "check" },
   ];
 
+  const statusCounts = (ctx.listas.tarefa_status || []).filter((i) => i.ativo).map((i) => ({
+    ...i, n: tasks.filter((t) => t.status === i.id).length,
+  }));
+
   return (
     <div className="content-scroll narrow" style={{ padding: 0 }}>
       <div className="section-head">
         <h2>Organização diária</h2>
         <span className="hint">{mine.filter((t) => t.status !== "Concluído").length} tarefas em aberto</span>
+      </div>
+
+      <div className="kpi-row" style={{ marginBottom: 18 }}>
+        {statusCounts.map((s) => (
+          <KpiTile key={s.id} label={s.nome} value={s.n} tone={taskTone(s.id)}
+            sub={s.n === 1 ? "tarefa" : "tarefas"}
+            onClick={() => setFiltroStatus((prev) => prev === s.id ? "Todos" : s.id)} />
+        ))}
       </div>
 
       <div style={{ display: "flex", gap: 8, alignItems: "center", margin: "0 0 14px" }}>
