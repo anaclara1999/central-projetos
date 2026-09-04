@@ -1686,7 +1686,7 @@ function App() {
           scope: GOOGLE_DRIVE_SCOPE,
           callback: () => {},
         });
-        attemptSilentSignIn();
+        setAuthStatus("deslogado");
         return;
       }
       tries += 1;
@@ -1758,45 +1758,30 @@ function App() {
     picker.setVisible(true);
   }
 
-  /* Tenta reconectar sem mostrar nenhuma tela do Google, reaproveitando a sessão do Google já
-     aberta no navegador e o consentimento já dado antes (prompt "" = silencioso, sem popup de
-     escolha de conta nem de revisão de permissões). Nada fica persistido para isso — só o token
-     em memória de sempre; quem garante a continuidade é a própria sessão do Google no navegador.
-     Como não parte de um clique, alguns navegadores podem bloquear a tentativa — por isso o
-     temporizador de segurança abaixo garante que a tela de login manual aparece de qualquer forma
-     em vez de travar em "verificando" para sempre. */
-  function attemptSilentSignIn() {
-    if (!tokenClientRef.current) { setAuthStatus("deslogado"); return; }
-    let settled = false;
-    const fallback = setTimeout(() => { if (!settled) { settled = true; setAuthStatus("deslogado"); } }, 3000);
-    tokenClientRef.current.callback = (resp) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(fallback);
-      if (resp.error) { setAuthStatus("deslogado"); return; }
-      accessTokenRef.current = resp.access_token;
-      setAuthStatus("logado");
-    };
-    try {
-      tokenClientRef.current.requestAccessToken({ prompt: "" });
-    } catch (e) {
-      if (!settled) { settled = true; clearTimeout(fallback); setAuthStatus("deslogado"); }
-    }
-  }
-
-  /* Vai direto para a tela cheia de permissões — não tenta de novo o modo silencioso aqui, porque
-     a tentativa automática ao carregar a página (attemptSilentSignIn) já tentou e falhou antes de
-     este botão sequer aparecer; tentar de novo só duplicava o pedido de login (via de regra falhando
-     do mesmo jeito) antes de mostrar a tela real, dando a impressão de "logar duas vezes". */
+  /* A tentativa silenciosa (prompt "") só é feita aqui, dentro do clique em "Entrar com Google" —
+     nunca automaticamente ao carregar a página. O Google recomenda explicitamente nunca chamar
+     requestAccessToken() fora de uma interação direta do usuário: fora de um clique, o pedido pode
+     ficar "preso" sem completar (o navegador não bloqueia visivelmente, mas o Google também não
+     finaliza o fluxo), o que na prática exigia repetir o login duas vezes. Com o clique real, o modo
+     silencioso primeiro resolve na hora (sem tela de escolha de conta) quando já há consentimento
+     válido; só recorre à tela cheia se isso falhar (primeiro uso, ou consentimento revogado). */
   function signInWithGoogle() {
     if (!tokenClientRef.current) return;
     setAuthStatus("entrando");
     tokenClientRef.current.callback = (resp) => {
-      if (resp.error) { setAuthStatus("erro"); return; }
+      if (resp.error) {
+        tokenClientRef.current.callback = (resp2) => {
+          if (resp2.error) { setAuthStatus("erro"); return; }
+          accessTokenRef.current = resp2.access_token;
+          setAuthStatus("logado");
+        };
+        tokenClientRef.current.requestAccessToken({ prompt: "consent" });
+        return;
+      }
       accessTokenRef.current = resp.access_token;
       setAuthStatus("logado");
     };
-    tokenClientRef.current.requestAccessToken({ prompt: "consent" });
+    tokenClientRef.current.requestAccessToken({ prompt: "" });
   }
 
   function signOutGoogle() {
