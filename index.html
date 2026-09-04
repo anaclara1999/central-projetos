@@ -1408,6 +1408,15 @@ function PersonSelect({ ctx, value, onChange, role, allowEmpty, emptyLabel = "�
   );
 }
 
+/* Contas Google disponíveis para operações no Drive (Picker e upload): a conta de dados da Central
+   sempre entra primeiro (id null), seguida das contas adicionais conectadas com Drive ativo. */
+function driveAccountOptions(ctx) {
+  return [
+    { id: null, label: "Conta de dados da Central" },
+    ...ctx.googleAccounts.filter((a) => a.usaDrive).map((a) => ({ id: a.id, label: a.apelido || a.email })),
+  ];
+}
+
 /* Botão para escolher um arquivo ("file") ou pasta ("folder") do Google Drive via Picker, numa das
    contas conectadas (conta de dados da Central + contas adicionais com Drive ativo). Quando há mais
    de uma conta disponível, mostra um pequeno seletor antes de abrir o Picker — nunca assume qual
@@ -1415,10 +1424,7 @@ function PersonSelect({ ctx, value, onChange, role, allowEmpty, emptyLabel = "�
    dona da pasta, o Picker já abre navegando a partir dela. */
 function DrivePickerButton({ ctx, mode = "file", startFolder, onPick, label }) {
   const [showChooser, setShowChooser] = useState(false);
-  const contas = [
-    { id: null, label: "Conta de dados da Central" },
-    ...ctx.googleAccounts.filter((a) => a.usaDrive).map((a) => ({ id: a.id, label: a.apelido || a.email })),
-  ];
+  const contas = driveAccountOptions(ctx);
 
   function escolher(accountId) {
     setShowChooser(false);
@@ -1437,6 +1443,126 @@ function DrivePickerButton({ ctx, mode = "file", startFolder, onPick, label }) {
           {contas.map((c) => <button type="button" key={c.id || "central"} onClick={() => escolher(c.id)}>{c.label}</button>)}
         </div>
       )}
+    </div>
+  );
+}
+
+/* Modal "Adicionar documento" — três formas de trazer um documento para o projeto: colar um link
+   qualquer, enviar um arquivo da máquina (upload real para o Drive da conta escolhida) ou selecionar
+   um arquivo já existente no Drive via Picker. Em qualquer um dos três casos, a Central guarda só o
+   link resultante — nunca o arquivo em si. */
+function DocumentAddModal({ ctx, projectId, startFolder, onClose }) {
+  const [method, setMethod] = useState("link"); // link | upload | drive
+  const [nome, setNome] = useState("");
+  const [tipoMaterial, setTipoMaterial] = useState("");
+  const [classificacao, setClassificacao] = useState("Material de apoio");
+  const [link, setLink] = useState("");
+  const [uploadAccountId, setUploadAccountId] = useState(null);
+  const [uploadFile, setUploadFile] = useState(null);
+  const [uploading, setUploading] = useState(false);
+  const [error, setError] = useState("");
+  const contas = driveAccountOptions(ctx);
+
+  function finish(payload) {
+    ctx.addDocument({ projectId, categoria: tipoMaterial, classificacao, ...payload });
+    onClose();
+  }
+
+  function handleSubmitLink(e) {
+    e.preventDefault();
+    if (!nome.trim()) { setError("Preencha o nome do documento."); return; }
+    finish({ nome, link });
+  }
+
+  async function handleSubmitUpload(e) {
+    e.preventDefault();
+    if (!uploadFile) { setError("Escolha um arquivo."); return; }
+    setError(""); setUploading(true);
+    try {
+      const result = await ctx.uploadFileToDrive({ accountId: uploadAccountId, file: uploadFile });
+      finish({ nome: nome.trim() || result.nome, link: result.link, driveAccountId: uploadAccountId, driveFileId: result.id });
+    } catch (err) {
+      setUploading(false);
+      setError(err.message || "Falha ao enviar o arquivo.");
+    }
+  }
+
+  function handlePickFromDrive(doc, accountId) {
+    finish({ nome: doc.nome, link: doc.link, driveAccountId: accountId, driveFileId: doc.id });
+  }
+
+  return (
+    <div className="overlay modal-center" onClick={onClose}>
+      <div className="modal-box" onClick={(e) => e.stopPropagation()} style={{ width: "min(520px, 100%)" }}>
+        <div className="drawer-header">
+          <h2 style={{ fontSize: 15 }}>Adicionar documento</h2>
+          <button className="drawer-close" onClick={onClose}><Icon name="x" /></button>
+        </div>
+        <div className="drawer-body" style={{ padding: 18 }}>
+          <div className="diary-filter-chips" style={{ marginBottom: 14 }}>
+            <span className={cx("chip", method === "link" && "active")} onClick={() => setMethod("link")}>Link</span>
+            <span className={cx("chip", method === "upload" && "active")} onClick={() => setMethod("upload")}>Upload da máquina</span>
+            <span className={cx("chip", method === "drive" && "active")} onClick={() => setMethod("drive")}>Google Drive</span>
+          </div>
+
+          <div className="field-grid" style={{ marginBottom: 12 }}>
+            <div className="field"><span className="k">Tipo</span><ConfigListSelect ctx={ctx} listId="material_tipo" value={tipoMaterial} onChange={setTipoMaterial} allowEmpty emptyLabel="Tipo…" /></div>
+            <div className="field"><span className="k">Classificação</span><ConfigListSelect ctx={ctx} listId="material_classificacao" value={classificacao} onChange={setClassificacao} /></div>
+          </div>
+
+          {method === "link" && (
+            <form onSubmit={handleSubmitLink}>
+              <div className="field-block" style={{ margin: "0 0 12px" }}>
+                <span className="k">Nome do documento</span>
+                <input type="text" value={nome} onChange={(e) => setNome(e.target.value)} style={fieldInputStyle} autoFocus />
+              </div>
+              <div className="field-block" style={{ margin: "0 0 12px" }}>
+                <span className="k">Link (https://…)</span>
+                <input type="text" value={link} onChange={(e) => setLink(e.target.value)} style={fieldInputStyle} />
+              </div>
+              {error && <div className="stale-alert" style={{ marginBottom: 12 }}><Icon name="alert" size={12} /> {error}</div>}
+              <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
+                <button type="button" className="btn btn-ghost btn-sm" onClick={onClose}>Cancelar</button>
+                <button type="submit" className="btn btn-primary btn-sm">Adicionar documento</button>
+              </div>
+            </form>
+          )}
+
+          {method === "upload" && (
+            <form onSubmit={handleSubmitUpload}>
+              <div className="field-block" style={{ margin: "0 0 12px" }}>
+                <span className="k">Nome do documento (opcional — usa o nome do arquivo se vazio)</span>
+                <input type="text" value={nome} onChange={(e) => setNome(e.target.value)} style={fieldInputStyle} />
+              </div>
+              <div className="field-block" style={{ margin: "0 0 12px" }}>
+                <span className="k">Enviar para a conta</span>
+                <select value={uploadAccountId || ""} onChange={(e) => setUploadAccountId(e.target.value || null)} style={fieldInputStyle}>
+                  {contas.map((c) => <option key={c.id || "central"} value={c.id || ""}>{c.label}</option>)}
+                </select>
+              </div>
+              <div className="field-block" style={{ margin: "0 0 12px" }}>
+                <span className="k">Arquivo (até 10MB)</span>
+                <input type="file" onChange={(e) => setUploadFile(e.target.files && e.target.files[0])} />
+              </div>
+              {error && <div className="stale-alert" style={{ marginBottom: 12 }}><Icon name="alert" size={12} /> {error}</div>}
+              <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
+                <button type="button" className="btn btn-ghost btn-sm" onClick={onClose} disabled={uploading}>Cancelar</button>
+                <button type="submit" className="btn btn-primary btn-sm" disabled={uploading}>{uploading ? "Enviando…" : "Enviar e adicionar"}</button>
+              </div>
+            </form>
+          )}
+
+          {method === "drive" && (
+            <div>
+              <p className="hint" style={{ margin: "0 0 12px" }}>Escolha a conta e selecione um arquivo já existente no Google Drive.</p>
+              <DrivePickerButton ctx={ctx} mode="file" startFolder={startFolder} onPick={handlePickFromDrive} label="Selecionar do Google Drive" />
+              <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 20 }}>
+                <button type="button" className="btn btn-ghost btn-sm" onClick={onClose}>Cancelar</button>
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
     </div>
   );
 }
@@ -1764,6 +1890,28 @@ function App() {
       })
       .build();
     picker.setVisible(true);
+  }
+
+  /* Upload real de um arquivo local para o Google Drive da conta escolhida (a de dados da Central,
+     ou uma adicional conectada) — a Central nunca guarda o arquivo em si, só o link do Drive
+     resultante, exatamente como no Picker. Limite de 10MB porque o upload simples (multipart) usado
+     aqui não é indicado para arquivos maiores — Drive Web ou o próprio Picker seguem sendo o caminho
+     para arquivos grandes já existentes. */
+  async function uploadFileToDrive({ accountId, file }) {
+    const token = accountId
+      ? (googleAccountTokensRef.current[accountId] && googleAccountTokensRef.current[accountId].accessToken)
+      : accessTokenRef.current;
+    if (!token) throw new Error("Essa conta não está conectada nesta sessão — reconecte em Configurações > Contas Google.");
+    if (file.size > 10 * 1024 * 1024) throw new Error("Arquivo muito grande para upload direto (limite 10MB) — envie pelo Google Drive e depois use \"Selecionar do Google Drive\".");
+    const form = new FormData();
+    form.append("metadata", new Blob([JSON.stringify({ name: file.name })], { type: "application/json" }));
+    form.append("file", file);
+    const res = await fetch("https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,name,webViewLink,mimeType", {
+      method: "POST", headers: { Authorization: "Bearer " + token }, body: form,
+    });
+    if (!res.ok) throw new Error("Falha ao enviar o arquivo para o Drive (HTTP " + res.status + ").");
+    const data = await res.json();
+    return { id: data.id, nome: data.name, link: data.webViewLink, mimeType: data.mimeType };
   }
 
   /* Um único pedido, direto para a tela de permissões (prompt "consent"). Testamos tentar primeiro
@@ -3163,7 +3311,7 @@ function App() {
     authStatus, signInWithGoogle, signOutGoogle, setToast,
     googleAccounts, googleAccountStatus, googleAccountError, googleCalendarsByAccount, googleEvents, googleEventsSyncStatus, googleEventLinks,
     connectGoogleAccount, reconnectGoogleAccount, disconnectGoogleAccount, removeGoogleAccount, updateGoogleAccountCalendarios,
-    syncGoogleAgenda, linkGoogleEventToProject, importGoogleEventAsMeeting, openDrivePicker };
+    syncGoogleAgenda, linkGoogleEventToProject, importGoogleEventAsMeeting, openDrivePicker, uploadFileToDrive };
 
   if (authStatus !== "logado") {
     return (
@@ -4244,10 +4392,7 @@ function PendencyRow({ p, onOpen }) {
 function MateriaisTab({ project, ctx }) {
   const [cat, setCat] = useState("Todas");
   const [classif, setClassif] = useState("Todas");
-  const [nome, setNome] = useState("");
-  const [tipoMaterial, setTipoMaterial] = useState("");
-  const [classificacao, setClassificacao] = useState("Material de apoio");
-  const [link, setLink] = useState("");
+  const [showAdd, setShowAdd] = useState(false);
 
   const all = ctx.documents.filter((d) => d.projectId === project.id);
   const categorias = Array.from(new Set(all.map((d) => d.categoria)));
@@ -4255,30 +4400,14 @@ function MateriaisTab({ project, ctx }) {
     .filter((d) => cat === "Todas" || d.categoria === cat)
     .filter((d) => classif === "Todas" || d.classificacao === classif);
 
-  function handleAdd(e) {
-    e.preventDefault();
-    if (!nome.trim()) return;
-    ctx.addDocument({ projectId: project.id, nome, categoria: tipoMaterial, classificacao, link });
-    setNome(""); setLink("");
-  }
-  function handlePickFile(doc, accountId) {
-    ctx.addDocument({ projectId: project.id, nome: doc.nome, categoria: tipoMaterial, classificacao, link: doc.link, driveAccountId: accountId, driveFileId: doc.id });
-  }
-
   return (
     <div>
       <div className="section-head"><h2>Documentos</h2><span className="hint">PRDs, atas, apresentações, planilhas, links e demais referências reunidas para o projeto</span></div>
 
-      <form className="quick-add" onSubmit={handleAdd} style={{ flexWrap: "wrap" }}>
-        <input type="text" placeholder="Nome do documento" value={nome} onChange={(e) => setNome(e.target.value)} style={{ flex: "1 1 200px" }} />
-        <ConfigListSelect ctx={ctx} listId="material_tipo" value={tipoMaterial} onChange={setTipoMaterial} allowEmpty emptyLabel="Tipo…" style={{}} />
-        <ConfigListSelect ctx={ctx} listId="material_classificacao" value={classificacao} onChange={setClassificacao} style={{}} />
-        <input type="text" placeholder="Link (https://…)" value={link} onChange={(e) => setLink(e.target.value)} style={{ flex: "1 1 200px" }} />
-        <button type="submit" className="btn btn-primary btn-sm">Adicionar documento</button>
-      </form>
-      <div style={{ margin: "0 0 14px" }}>
-        <DrivePickerButton ctx={ctx} mode="file" startFolder={project.pastaDrive} onPick={handlePickFile} label="Selecionar do Google Drive" />
+      <div style={{ margin: "0 0 16px" }}>
+        <button type="button" className="btn btn-primary btn-sm" onClick={() => setShowAdd(true)}><Icon name="plus" size={13} /> Adicionar documento</button>
       </div>
+      {showAdd && <DocumentAddModal ctx={ctx} projectId={project.id} startFolder={project.pastaDrive} onClose={() => setShowAdd(false)} />}
 
       <div className="diary-filter-chips">
         <span className={cx("chip", cat === "Todas" && "active")} onClick={() => setCat("Todas")}>Todos os tipos</span>
