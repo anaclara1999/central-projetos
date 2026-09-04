@@ -883,6 +883,7 @@ table.data-table tbody tr:last-child td { border-bottom: none; }
 <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.3.1/umd/react-dom.production.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.24.7/babel.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/mammoth/1.12.2/mammoth.browser.min.js"></script>
 <script src="https://accounts.google.com/gsi/client" async defer></script>
 
 <script type="text/babel" data-presets="react">
@@ -908,25 +909,82 @@ const TODAY = todayIso();
    colar aqui embaixo — ver o guia de configuração que acompanha este arquivo.
    Enquanto o valor abaixo não for substituído, o app mostra uma tela avisando que
    falta configurar, em vez de travar ou dar erro confuso. */
-const GOOGLE_CLIENT_ID = "394531176143-69mtdn1qcnpmuvib4fuggjcjfd7m41ak.apps.googleusercontent.com";
+const GOOGLE_CLIENT_ID = "COLE_AQUI_SEU_CLIENT_ID";
 const GOOGLE_DRIVE_SCOPE = "https://www.googleapis.com/auth/drive.file";
 const DRIVE_DATA_FILENAME = "central-projetos-dados.json";
 
 /* --------------------------------- PESSOAS -------------------------------- */
+/* PEOPLE existe apenas como semente da migração única para a coleção "pessoas" (cadastro real,
+   editável em Configurações > Pessoas). Depois da migração, o app nunca mais lê PEOPLE em tempo de
+   execução — ver CURRENT_PEOPLE logo abaixo. O id "clara" é mantido de propósito (é o mesmo valor já
+   usado em "responsavel" por todo o app). */
 const PEOPLE = {
   clara: { nome: "Ana Clara", iniciais: "AC" },
 };
 
+/* --------------------------------- EMPRESAS -------------------------------- */
+/* Começa vazia de propósito — nenhuma empresa vem pré-cadastrada (nem "Contabilidade Facilitada"),
+   cada pessoa que usar esta versão cadastra as suas em Configurações > Empresas. Um projeto sem
+   empresa (empresaId null) é tratado como "Pessoal / Sem empresa" na interface. */
+const EMPRESAS = [];
+
 /* -------------------------------- PROJETOS -------------------------------- */
 const PROJECTS = [];
 
-/* Opções padronizadas — reaproveitadas em filtros e formulários */
+/* ---------------------------------------------------------------------------------------------
+   LISTAS E CATEGORIAS CONFIGURÁVEIS
+   Antes, essas opções eram constantes fixas (*_OPTIONS) usadas direto nos formulários. Agora elas
+   viram a SEMENTE de cadastros editáveis (coleção "listas", uma coleção com um documento por lista,
+   cada um com um array de itens {id, nome, ativo, ordem, systemRole}). Regra de integridade: o "id"
+   de cada item semeado aqui é sempre o texto original (ex.: "Concluído"), porque é esse mesmo texto
+   que já está gravado em registros existentes e que a lógica interna do app compara diretamente
+   (projeto ativo, KPIs, cores de status etc.). Isso permite renomear o "nome" exibido livremente
+   (ex.: "Em andamento" → "Execução") sem quebrar nenhuma regra, exatamente como pedido. "systemRole"
+   marca os itens que a lógica interna realmente reconhece hoje; itens novos criados depois entram
+   sem systemRole e se comportam como uma opção comum (não afetam KPIs/regras especiais). */
+function seedListItems(nomes, systemRoleByNome) {
+  return nomes.map((nome, i) => ({ id: nome, nome, ativo: true, ordem: i, systemRole: (systemRoleByNome && systemRoleByNome[nome]) || null }));
+}
+/* converte o estado em memória de "listas" ({listId: [itens]}) para o formato de coleção (um
+   documento por lista) usado na persistência e no backup/restauração */
+function listasToArrayDocs(listasObj) {
+  return Object.entries(listasObj || {}).map(([id, itens]) => ({ id, itens: itens || [] }));
+}
+const DEFAULT_LISTS = {
+  projeto_status: { label: "Status (Projetos)", itens: seedListItems(["Planejamento", "Em andamento", "Aguardando", "Pausado", "Concluído"], { "Concluído": "concluido", "Pausado": "pausado" }) },
+  projeto_saude: { label: "Saúde (Projetos)", itens: seedListItems(["Saudável", "Atenção", "Crítico"], { "Atenção": "atencao", "Crítico": "critico" }) },
+  projeto_prioridade: { label: "Prioridade (Projetos)", itens: seedListItems(["Alta", "Média", "Baixa"]) },
+  projeto_area: { label: "Áreas (Projetos)", itens: [] }, // semeada também a partir das áreas já usadas nos projetos existentes (ver migração)
+  tarefa_status: { label: "Status (Tarefas)", itens: seedListItems(["A fazer", "Em andamento", "Aguardando", "Concluído"], { "Concluído": "concluido" }) },
+  tarefa_prioridade: { label: "Prioridade (Tarefas)", itens: seedListItems(["Alta", "Média", "Baixa"]) },
+  decisao_status: { label: "Status (Decisões)", itens: seedListItems(["Em análise", "Aguardando definição", "Definida", "Revisada", "Cancelada"]) },
+  pendencia_status: { label: "Status (Pendências)", itens: seedListItems(["Aberta", "Atrasada", "Resolvida"], { "Resolvida": "resolvida" }) },
+  pendencia_prioridade: { label: "Prioridade (Pendências)", itens: seedListItems(["Alta", "Média", "Baixa"]) },
+  risco_tipo: { label: "Tipo (Riscos/Problemas/Impedimentos)", itens: seedListItems(["Risco", "Problema", "Impedimento"]) },
+  risco_status: { label: "Status (Riscos/Problemas/Impedimentos)", itens: seedListItems(["Ativo", "Em monitoramento", "Mitigado", "Resolvido"], { "Resolvido": "resolvido" }) },
+  risco_probabilidade: { label: "Probabilidade (Riscos)", itens: seedListItems(["Baixa", "Média", "Alta"]) },
+  risco_impacto: { label: "Impacto (Riscos)", itens: seedListItems(["Baixo", "Médio", "Alto"]) },
+  marco_status: { label: "Status (Marcos)", itens: seedListItems(["Não iniciado", "Em andamento", "Em risco", "Concluído", "Atrasado", "Cancelado"], { "Concluído": "concluido", "Cancelado": "cancelado" }) },
+  material_tipo: { label: "Tipo (Materiais)", itens: seedListItems(["PRD", "Ata", "Apresentação", "Planilha", "Processo", "Política", "Diagnóstico", "POP", "IT", "Evidência", "Material de apoio", "Link", "Contrato", "Referência externa"]) },
+  material_classificacao: { label: "Classificação (Materiais)", itens: seedListItems(["Documento oficial", "Material de apoio"]) },
+  nota_categoria: { label: "Categorias (Anotações)", itens: seedListItems(["Reunião", "Levantamento", "Análise", "Ideia", "Planejamento", "Pesquisa", "Registro", "Rascunho", "Referência", "Outro"]) },
+  nota_tag_sugerida: { label: "Tags sugeridas (Anotações)", itens: [] },
+  mudanca_tipo: { label: "Tipos de mudança", itens: seedListItems(["Mudança de escopo", "Mudança de prazo", "Mudança de custo", "Mudança de responsável", "Outra"]) },
+  reuniao_categoria: { label: "Categorias/tipos (Reuniões)", itens: [] },
+};
+/* mantidas apenas como referência histórica das opções antigas (não são mais lidas em tempo de
+   execução — o app passou a usar ctx.listas, ver App()) */
 const PROJECT_STATUS_OPTIONS = ["Planejamento", "Em andamento", "Aguardando", "Pausado", "Concluído"];
 const PROJECT_SAUDE_OPTIONS = ["Saudável", "Atenção", "Crítico"];
 const MATERIAL_TIPO_OPTIONS = ["PRD", "Ata", "Apresentação", "Planilha", "Processo", "Política", "Diagnóstico", "POP", "IT", "Evidência", "Material de apoio", "Link", "Contrato", "Referência externa"];
 const MATERIAL_CLASSIFICACAO_OPTIONS = ["Documento oficial", "Material de apoio"];
 const MILESTONE_STATUS_OPTIONS = ["Não iniciado", "Em andamento", "Em risco", "Concluído", "Atrasado", "Cancelado"];
 const NOTE_CATEGORIA_OPTIONS = ["Reunião", "Levantamento", "Análise", "Ideia", "Planejamento", "Pesquisa", "Registro", "Rascunho", "Referência", "Outro"];
+
+/* --------------------------------- IDENTIDADE VISUAL --------------------------------- */
+/* Guardada como uma coleção de um único documento (id "config") para reaproveitar, sem casos
+   especiais, a mesma máquina de backup/restauração já usada pelas demais coleções. */
+const IDENTIDADE_VISUAL_PADRAO = { id: "config", nomeApp: "Central de Projetos", subtitulo: "Versão pessoal", logoDataUrl: null };
 
 /* ------------------------------- MINI TAREFAS ------------------------------ */
 /* status: "A fazer" | "Em andamento" | "Aguardando" | "Concluído"            */
@@ -979,19 +1037,41 @@ const NOTES = [];
 const REMINDERS = [];
 
 /* ------------------------------ FUNÇÕES AUXILIARES ---------------------------- */
-function personLabel(key) {
-  return PEOPLE[key] ? PEOPLE[key].nome : key;
-}
-function personInitials(key) {
-  return PEOPLE[key] ? PEOPLE[key].iniciais : "??";
-}
-/* Projetos e Marcos passaram a ser editáveis (estado em App). Como projectById() é chamado a partir de
-   dezenas de componentes que não recebem ctx, mantemos uma referência mutável de módulo, atualizada a
-   cada render de App() logo após o useState — funciona porque o React renderiza esta árvore de forma
-   síncrona a partir daí. */
+/* Projetos, Pessoas e Empresas são editáveis (estado em App). Como as funções abaixo são chamadas a
+   partir de dezenas de componentes que não recebem ctx, mantemos referências mutáveis de módulo,
+   atualizadas a cada render de App() logo após os useState — funciona porque o React renderiza esta
+   árvore de forma síncrona a partir daí. */
 let CURRENT_PROJECTS = PROJECTS;
 function projectById(id) {
   return CURRENT_PROJECTS.find((p) => p.id === id) || null;
+}
+let CURRENT_PEOPLE = null; // null até a migração/carregamento terminar — ver App()
+function personLabel(key) {
+  if (!key) return "";
+  const p = CURRENT_PEOPLE && CURRENT_PEOPLE.find((x) => x.id === key);
+  if (p) return p.nome;
+  return PEOPLE[key] ? PEOPLE[key].nome : key;
+}
+function initialsFromName(nome) {
+  const partes = (nome || "").trim().split(/\s+/).filter(Boolean);
+  if (partes.length === 0) return "??";
+  if (partes.length === 1) return partes[0].slice(0, 2).toUpperCase();
+  return (partes[0][0] + partes[partes.length - 1][0]).toUpperCase();
+}
+function personInitials(key) {
+  if (!key) return "??";
+  const p = CURRENT_PEOPLE && CURRENT_PEOPLE.find((x) => x.id === key);
+  if (p) return p.iniciais || initialsFromName(p.nome);
+  return PEOPLE[key] ? PEOPLE[key].iniciais : "??";
+}
+let CURRENT_EMPRESAS = [];
+function empresaById(id) {
+  if (!id) return null;
+  return CURRENT_EMPRESAS.find((e) => e.id === id) || null;
+}
+function empresaLabel(id) {
+  const e = empresaById(id);
+  return e ? e.nome : "Pessoal / Sem empresa";
 }
 function daysBetween(dateA, dateB) {
   const a = new Date(dateA + "T00:00:00");
@@ -1142,6 +1222,9 @@ function Icon({ name, size = 16, className }) {
     dot: <circle cx="12" cy="12" r="4" fill="currentColor" stroke="none" />,
     bell: <><path d="M12 3.5c-3 0-5 2.3-5 5.3v3.2l-1.7 3h13.4l-1.7-3V8.8c0-3-2-5.3-5-5.3z" /><path d="M9.7 18.3a2.4 2.4 0 0 0 4.6 0" /></>,
     archive: <><rect x="3.5" y="4.5" width="17" height="4.5" rx="1" /><path d="M4.5 9v9a1 1 0 0 0 1 1h13a1 1 0 0 0 1-1V9" /><path d="M10 13h4" /></>,
+    settings: <><circle cx="12" cy="12" r="3.2" /><path d="M12 3.5v2.4M12 18.1v2.4M20.5 12h-2.4M5.9 12H3.5M17.7 6.3l-1.7 1.7M8 16l-1.7 1.7M17.7 17.7L16 16M8 8 6.3 6.3" /></>,
+    upload: <><path d="M12 16V5" /><path d="M7.5 9.5 12 5l4.5 4.5" /><path d="M4.5 16.5V19a1.5 1.5 0 0 0 1.5 1.5h12a1.5 1.5 0 0 0 1.5-1.5v-2.5" /></>,
+    trash: <><path d="M5 7h14" /><path d="M9 7V5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2" /><path d="M6.5 7l1 12.5a1 1 0 0 0 1 1h7a1 1 0 0 0 1-1L17.5 7" /><path d="M10 11v6M14 11v6" /></>,
   };
   return <svg {...s} className={className} aria-hidden="true">{paths[name] || null}</svg>;
 }
@@ -1180,6 +1263,57 @@ function EmptyState({ icon = "inbox", text }) {
   );
 }
 
+/* ------------------------- LISTAS E CATEGORIAS CONFIGURÁVEIS: select reutilizável ------------------------- */
+/* Usado em todo formulário que antes tinha uma lista fixa (status, saúde, prioridade, tipo, área etc.).
+   Mostra apenas itens ativos da lista configurada em Configurações > Listas e Categorias, sempre na
+   ordem definida lá, e permite adicionar um item novo na hora ("+ Adicionar novo…"), sem sair da tela. */
+function ConfigListSelect({ ctx, listId, value, onChange, allowEmpty, emptyLabel = "—", style, allowInlineAdd = true }) {
+  const itens = (ctx.listas[listId] || []).filter((i) => i.ativo || i.id === value).sort((a, b) => a.ordem - b.ordem);
+  function handleChange(e) {
+    const v = e.target.value;
+    if (v === "__novo__") {
+      const nome = window.prompt("Nome do novo item:");
+      if (nome && nome.trim()) {
+        const item = ctx.addListItem(listId, nome);
+        if (item) onChange(item.id);
+      }
+      return;
+    }
+    onChange(v);
+  }
+  return (
+    <select value={value || ""} onChange={handleChange} style={style || fieldInputStyle}>
+      {allowEmpty && <option value="">{emptyLabel}</option>}
+      {itens.map((i) => <option key={i.id} value={i.id}>{i.nome}</option>)}
+      {allowInlineAdd && <option value="__novo__">+ Adicionar novo…</option>}
+    </select>
+  );
+}
+
+/* ------------------------- PESSOAS: select reutilizável (Responsável/Sponsor) ------------------------- */
+function PersonSelect({ ctx, value, onChange, role, allowEmpty, emptyLabel = "—", style }) {
+  const pessoas = (ctx.pessoas || []).filter((p) => (p.ativo || p.id === value) && (role === "sponsor" ? true : p.podeResponsavel !== false)).filter((p) => role !== "sponsor" || p.podeSponsor);
+  function handleChange(e) {
+    const v = e.target.value;
+    if (v === "__nova__") {
+      const nome = window.prompt("Nome da nova pessoa:");
+      if (nome && nome.trim()) {
+        const rec = ctx.addPessoa({ nome, podeResponsavel: true, podeSponsor: role === "sponsor" });
+        onChange(rec.id);
+      }
+      return;
+    }
+    onChange(v);
+  }
+  return (
+    <select value={value || ""} onChange={handleChange} style={style || fieldInputStyle}>
+      {allowEmpty && <option value="">{emptyLabel}</option>}
+      {pessoas.map((p) => <option key={p.id} value={p.id}>{p.nome}</option>)}
+      <option value="__nova__">+ Adicionar pessoa…</option>
+    </select>
+  );
+}
+
 /* ==================================================================================
    EXPORTAÇÃO DE NOTAS PARA WORD (.docx gerado no navegador, via JSZip)
    ================================================================================== */
@@ -1187,14 +1321,16 @@ const DOCX_CONTENT_TYPES = `<?xml version="1.0" encoding="UTF-8" standalone="yes
 <Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/><Override PartName="/docProps/core.xml" ContentType="application/vnd.openxmlformats-package.core-properties+xml"/><Override PartName="/docProps/app.xml" ContentType="application/vnd.openxmlformats-officedocument.extended-properties+xml"/></Types>`;
 const DOCX_RELS = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/package/2006/relationships/metadata/core-properties" Target="docProps/core.xml"/><Relationship Id="rId3" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/extended-properties" Target="docProps/app.xml"/></Relationships>`;
-const DOCX_APP_PROPS = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<Properties xmlns="http://schemas.openxmlformats.org/officeDocument/2006/extended-properties"><Application>Central de Projetos</Application></Properties>`;
+function docxAppProps(nomeApp) {
+  return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Properties xmlns="http://schemas.openxmlformats.org/officeDocument/2006/extended-properties"><Application>${docxXmlEscape(nomeApp || "Central de Projetos")}</Application></Properties>`;
+}
 function docxXmlEscape(str) {
   return String(str == null ? "" : str).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&apos;");
 }
-function docxCoreProps(title) {
+function docxCoreProps(title, nomeApp) {
   return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<cp:coreProperties xmlns:cp="http://schemas.openxmlformats.org/package/2006/metadata/core-properties" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:dcterms="http://purl.org/dc/terms/" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"><dc:title>${docxXmlEscape(title)}</dc:title><dc:creator>Central de Projetos</dc:creator><dcterms:created xsi:type="dcterms:W3CDTF">${new Date().toISOString()}</dcterms:created></cp:coreProperties>`;
+<cp:coreProperties xmlns:cp="http://schemas.openxmlformats.org/package/2006/metadata/core-properties" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:dcterms="http://purl.org/dc/terms/" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"><dc:title>${docxXmlEscape(title)}</dc:title><dc:creator>${docxXmlEscape(nomeApp || "Central de Projetos")}</dc:creator><dcterms:created xsi:type="dcterms:W3CDTF">${new Date().toISOString()}</dcterms:created></cp:coreProperties>`;
 }
 function docxParagraphsXml(lines) {
   return lines.map((l) => {
@@ -1302,12 +1438,12 @@ function htmlToDocxLines(html) {
   if (lines.length === 0) lines.push({ runs: [{ text: "" }] });
   return lines;
 }
-async function buildNoteDocx(note, project, meeting) {
+async function buildNoteDocx(note, project, meeting, nomeApp) {
   const zip = new JSZip();
   zip.file("[Content_Types].xml", DOCX_CONTENT_TYPES);
   zip.file("_rels/.rels", DOCX_RELS);
-  zip.file("docProps/core.xml", docxCoreProps(note.titulo || "Nota"));
-  zip.file("docProps/app.xml", DOCX_APP_PROPS);
+  zip.file("docProps/core.xml", docxCoreProps(note.titulo || "Nota", nomeApp));
+  zip.file("docProps/app.xml", docxAppProps(nomeApp));
 
   const lines = [{ text: note.titulo || "Nota", bold: true, size: 32 }];
   const meta = [];
@@ -1350,12 +1486,27 @@ function App() {
   const [projects, setProjects] = useState(PROJECTS);
   CURRENT_PROJECTS = projects; // ver comentário junto de projectById()
 
+  /* ---- Configurações administráveis: empresas, pessoas, listas configuráveis, identidade visual ---- */
+  const [empresas, setEmpresas] = useState(EMPRESAS);
+  CURRENT_EMPRESAS = empresas; // ver comentário junto de empresaById()
+  const [pessoas, setPessoas] = useState([]); // populado após a migração/carregamento — ver useEffect de inicialização
+  CURRENT_PEOPLE = pessoas.length > 0 ? pessoas : null;
+  const [listas, setListas] = useState(() => {
+    const obj = {};
+    Object.keys(DEFAULT_LISTS).forEach((k) => { obj[k] = DEFAULT_LISTS[k].itens; });
+    return obj;
+  }); // { [listId]: [{id,nome,ativo,ordem,systemRole}] } — populado de verdade após o carregamento
+  const [identidadeVisual, setIdentidadeVisual] = useState(IDENTIDADE_VISUAL_PADRAO);
+
   /* ---- estado de navegação ---- */
   const [route, setRoute] = useState({ view: "portfolio" });
   const [openItem, setOpenItem] = useState(null); // { type, id }
   const [quickList, setQuickList] = useState(null); // { title, items:[{type,id}] }
   const [projectForm, setProjectForm] = useState(null); // null | { mode: "create"|"edit", project }
   const [milestoneForm, setMilestoneForm] = useState(null); // null | { mode: "create"|"edit", projectId, milestone }
+  const [decisionForm, setDecisionForm] = useState(null); // null | { mode: "create"|"edit", projectId, decision }
+  const [pendencyForm, setPendencyForm] = useState(null); // null | { mode: "create"|"edit", projectId, pendency }
+  const [riskForm, setRiskForm] = useState(null); // null | { mode: "create"|"edit", projectId, risk }
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [theme, setTheme] = useState("system");
   const [toast, setToast] = useState(null);
@@ -1365,6 +1516,9 @@ function App() {
   /* ---- persistência (versão pessoal/portátil: Google Drive da própria pessoa, via login Google) ---- */
   const dbRef = useRef(null);
   const [dbStatus, setDbStatus] = useState("checking"); // checking | seeding | loading | ready | unavailable | error
+  /* status do salvamento em si (distinto de dbStatus, que é sobre inicialização/carregamento):
+     só passa a "saved" depois de uma resposta HTTP realmente confirmada (response.ok) do Google Drive */
+  const [driveSaveStatus, setDriveSaveStatus] = useState("idle"); // idle | saving | saved | error
 
   /* ---- login com Google e acesso ao Drive pessoal (substitui a capacidade "db" do Artifact) ---- */
   const tokenClientRef = useRef(null);
@@ -1372,6 +1526,9 @@ function App() {
   const driveFileIdRef = useRef(null);
   const driveStateRef = useRef(null); // espelho em memória do arquivo único de dados no Drive
   const driveSaveTimerRef = useRef(null);
+  const driveSaveWaitersRef = useRef([]); // callbacks aguardando a confirmação real do próximo PATCH
+  const driveSaveInFlightRef = useRef(false); // true enquanto um PATCH está em andamento (evita sobreposição)
+  const driveSaveDirtyRef = useRef(false); // true quando algo mudou durante um PATCH em andamento
   const [authStatus, setAuthStatus] = useState(
     GOOGLE_CLIENT_ID.indexOf("COLE_AQUI") === 0 ? "nao-configurado" : "verificando"
   ); // nao-configurado | verificando | deslogado | entrando | logado | erro
@@ -1442,10 +1599,11 @@ function App() {
   async function driveFindOrCreateFile() {
     const q = encodeURIComponent("name='" + DRIVE_DATA_FILENAME + "' and trashed=false");
     const listRes = await driveFetch("https://www.googleapis.com/drive/v3/files?q=" + q + "&spaces=drive&fields=files(id,name)");
+    if (!listRes.ok) throw new Error("Falha ao consultar o Google Drive (HTTP " + listRes.status + ")");
     const listJson = await listRes.json();
     if (listJson.files && listJson.files.length > 0) return listJson.files[0].id;
     const metadata = { name: DRIVE_DATA_FILENAME, mimeType: "application/json" };
-    const boundary = "cfboundary" + Date.now();
+    const boundary = "cpboundary" + Date.now();
     const body = "--" + boundary + "\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n" + JSON.stringify(metadata) +
       "\r\n--" + boundary + "\r\nContent-Type: application/json\r\n\r\n" + JSON.stringify({ meta: {}, collections: {} }) +
       "\r\n--" + boundary + "--";
@@ -1454,6 +1612,7 @@ function App() {
       headers: { "Content-Type": "multipart/related; boundary=" + boundary },
       body,
     });
+    if (!createRes.ok) throw new Error("Falha ao criar o arquivo de dados no Google Drive (HTTP " + createRes.status + ")");
     const createJson = await createRes.json();
     return createJson.id;
   }
@@ -1469,20 +1628,73 @@ function App() {
     } catch (e) { return { meta: {}, collections: {} }; }
   }
 
+  /* Executa de fato o PATCH no Google Drive e resolve/rejeita os "waiters" (chamadores que estão
+     aguardando essa gravação específica) de acordo com a resposta HTTP real (response.ok) — nunca
+     apenas com o agendamento do envio. Nunca deixa dois PATCH em voo ao mesmo tempo: se chegar uma
+     mudança nova enquanto este está em andamento, ela fica marcada como "dirty" e é reenviada assim
+     que este terminar, já com o estado mais recente. */
+  function performDriveSave(waiters) {
+    driveSaveInFlightRef.current = true;
+    setDriveSaveStatus("saving");
+    const payload = JSON.stringify(driveStateRef.current);
+    driveFetch("https://www.googleapis.com/upload/drive/v3/files/" + driveFileIdRef.current + "?uploadType=media", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: payload,
+    }).then((res) => {
+      if (!res || !res.ok) {
+        const err = new Error("Falha ao salvar no Google Drive" + (res ? " (HTTP " + res.status + ")" : ""));
+        setDriveSaveStatus("error");
+        waiters.forEach((w) => w.reject(err));
+      } else {
+        setDriveSaveStatus("saved");
+        waiters.forEach((w) => w.resolve());
+      }
+    }).catch((e) => {
+      console.warn("Falha ao salvar no Google Drive:", e);
+      setDriveSaveStatus("error");
+      waiters.forEach((w) => w.reject(e));
+    }).finally(() => {
+      driveSaveInFlightRef.current = false;
+      if (driveSaveDirtyRef.current) {
+        driveSaveDirtyRef.current = false;
+        const nextWaiters = driveSaveWaitersRef.current;
+        driveSaveWaitersRef.current = [];
+        performDriveSave(nextWaiters);
+      }
+    });
+  }
+
+  /* Agenda a gravação (com o mesmo debounce de antes) e devolve uma Promise que só resolve depois
+     da confirmação real (response.ok) do PATCH correspondente — quem chama pode usar isso para só
+     mostrar "salvo" quando o salvamento de fato aconteceu, e "erro ao salvar" caso contrário. */
   function scheduleDriveSave() {
-    clearTimeout(driveSaveTimerRef.current);
-    driveSaveTimerRef.current = setTimeout(() => {
-      if (!driveFileIdRef.current || !driveStateRef.current) return;
-      driveFetch("https://www.googleapis.com/upload/drive/v3/files/" + driveFileIdRef.current + "?uploadType=media", {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(driveStateRef.current),
-      }).catch((e) => console.warn("Falha ao salvar no Google Drive:", e));
-    }, 800);
+    return new Promise((resolve, reject) => {
+      driveSaveWaitersRef.current.push({ resolve, reject });
+      clearTimeout(driveSaveTimerRef.current);
+      driveSaveTimerRef.current = setTimeout(() => {
+        if (!driveFileIdRef.current || !driveStateRef.current) {
+          const waiters = driveSaveWaitersRef.current;
+          driveSaveWaitersRef.current = [];
+          setDriveSaveStatus("error");
+          waiters.forEach((w) => w.reject(new Error("armazenamento indisponível")));
+          return;
+        }
+        if (driveSaveInFlightRef.current) {
+          driveSaveDirtyRef.current = true; // será reenviado assim que o PATCH atual terminar
+          return;
+        }
+        const waiters = driveSaveWaitersRef.current;
+        driveSaveWaitersRef.current = [];
+        performDriveSave(waiters);
+      }, 800);
+    });
   }
 
   /* adaptador com a mesma "forma" de chamadas (collection/doc/get/set/delete) usada pelo resto do
-     app, para que persistDoc/deleteDocRemote e o carregamento abaixo não precisem mudar nada. */
+     app, para que persistDoc/deleteDocRemote e o carregamento abaixo não precisem mudar nada.
+     set()/delete() agora devolvem a Promise real de scheduleDriveSave(), então quem aguardar por
+     elas só recebe sucesso depois da confirmação HTTP do Google Drive. */
   function buildDriveDbAdapter() {
     const state = driveStateRef.current;
     return {
@@ -1492,7 +1704,7 @@ function App() {
             const val = state.meta[path];
             return { exists: val !== undefined, data: () => val };
           },
-          async set(data) { state.meta[path] = data; scheduleDriveSave(); },
+          set(data) { state.meta[path] = data; return scheduleDriveSave(); },
         };
       },
       collection(name) {
@@ -1504,8 +1716,8 @@ function App() {
           },
           doc(id) {
             return {
-              async set(data) { state.collections[name][id] = data; scheduleDriveSave(); },
-              async delete() { delete state.collections[name][id]; scheduleDriveSave(); },
+              set(data) { state.collections[name][id] = data; return scheduleDriveSave(); },
+              delete() { delete state.collections[name][id]; return scheduleDriveSave(); },
             };
           },
         };
@@ -1517,6 +1729,10 @@ function App() {
     if (theme === "system") document.documentElement.removeAttribute("data-theme");
     else document.documentElement.setAttribute("data-theme", theme);
   }, [theme]);
+
+  useEffect(() => {
+    document.title = identidadeVisual.nomeApp || "Central de Projetos";
+  }, [identidadeVisual.nomeApp]);
 
   useEffect(() => {
     if (!toast) return;
@@ -1539,14 +1755,20 @@ function App() {
         dbRef.current = d;
         const seedSnap = await d.doc("meta/seed").get();
         let loadedDocuments = null;
+        let loadedProjetosArr = null;
         if (seedSnap.exists && seedSnap.data() && seedSnap.data().done) {
           setDbStatus("loading");
-          const collections = { tasks: setTasks, meetings: setMeetings, decisions: setDecisions, pendencies: setPendencies, risks: setRisks, changes: setChanges, diary: setDiary, notes: setNotes, documents: setDocuments, reminders: setReminders, projetos: setProjects, marcos: setMilestones };
+          const collections = {
+            tasks: setTasks, meetings: setMeetings, decisions: setDecisions, pendencies: setPendencies, risks: setRisks, changes: setChanges, diary: setDiary, notes: setNotes, documents: setDocuments, reminders: setReminders, projetos: setProjects, marcos: setMilestones,
+            empresas: setEmpresas, pessoas: setPessoas,
+            listas: (arr) => { const obj = {}; arr.forEach((doc) => { obj[doc.id] = doc.itens || []; }); setListas((prev) => ({ ...prev, ...obj })); },
+            identidadeVisual: (arr) => { if (arr[0]) setIdentidadeVisual(arr[0]); },
+          };
           let projetosCount = 0, marcosCount = 0;
           for (const [name, setter] of Object.entries(collections)) {
             const snap = await d.collection(name).get();
             if (cancelled) return;
-            if (snap.size > 0) { const arr = snap.docs.map((doc) => doc.data()); setter(arr); if (name === "documents") loadedDocuments = arr; }
+            if (snap.size > 0) { const arr = snap.docs.map((doc) => doc.data()); setter(arr); if (name === "documents") loadedDocuments = arr; if (name === "projetos") loadedProjetosArr = arr; }
             if (name === "projetos") projetosCount = snap.size;
             if (name === "marcos") marcosCount = snap.size;
           }
@@ -1586,15 +1808,59 @@ function App() {
             }
             await d.doc("meta/materiaisMigration").set({ done: true, migratedAt: new Date().toISOString() });
           }
+          // migração única: Empresas, Pessoas, Listas e Categorias configuráveis e Identidade Visual são
+          // novos nesta versão. Quem já usava o app antes não tem essas coleções salvas; semeamos aqui,
+          // preservando qualquer "área" de projeto já digitada livremente antes de existir esse cadastro.
+          const configMigSnap = await d.doc("meta/configuracoesMigration").get();
+          if (!(configMigSnap.exists && configMigSnap.data() && configMigSnap.data().done)) {
+            const pessoasSnap = await d.collection("pessoas").get();
+            if (pessoasSnap.size === 0) {
+              const pessoaClara = { id: "clara", nome: PEOPLE.clara.nome, email: "", empresaId: null, area: "", cargo: "", ativo: true, podeResponsavel: true, podeSponsor: true, observacoes: "", iniciais: PEOPLE.clara.iniciais };
+              await d.collection("pessoas").doc("clara").set(pessoaClara);
+              if (!cancelled) setPessoas([pessoaClara]);
+            }
+            const listasSnap = await d.collection("listas").get();
+            if (listasSnap.size === 0) {
+              const areasExistentes = [...new Set((loadedProjetosArr || []).map((p) => (p.area || "").trim()).filter(Boolean))];
+              const listasParaGravar = Object.entries(DEFAULT_LISTS).map(([listId, def]) => {
+                const itens = listId === "projeto_area" ? areasExistentes.map((nome, i) => ({ id: nome, nome, ativo: true, ordem: i, systemRole: null })) : def.itens;
+                return { id: listId, itens };
+              });
+              await Promise.all(listasParaGravar.map((doc) => d.collection("listas").doc(doc.id).set(doc)));
+              if (!cancelled) {
+                const obj = {}; listasParaGravar.forEach((doc) => { obj[doc.id] = doc.itens; });
+                setListas((prev) => ({ ...prev, ...obj }));
+              }
+            }
+            const ivSnap = await d.collection("identidadeVisual").get();
+            if (ivSnap.size === 0) {
+              await d.collection("identidadeVisual").doc("config").set(IDENTIDADE_VISUAL_PADRAO);
+              if (!cancelled) setIdentidadeVisual(IDENTIDADE_VISUAL_PADRAO);
+            }
+            await d.doc("meta/configuracoesMigration").set({ done: true, migratedAt: new Date().toISOString() });
+          }
         } else {
           setDbStatus("seeding");
-          const seedData = { tasks: TASKS, meetings: MEETINGS, decisions: DECISIONS, pendencies: PENDENCIES, risks: RISKS, changes: CHANGES, diary: DIARY, notes: NOTES, documents: DOCUMENTS, reminders: REMINDERS, projetos: PROJECTS, marcos: MILESTONES };
+          const seedData = {
+            tasks: TASKS, meetings: MEETINGS, decisions: DECISIONS, pendencies: PENDENCIES, risks: RISKS, changes: CHANGES, diary: DIARY, notes: NOTES, documents: DOCUMENTS, reminders: REMINDERS, projetos: PROJECTS, marcos: MILESTONES,
+            empresas: EMPRESAS,
+            pessoas: [{ id: "clara", nome: PEOPLE.clara.nome, email: "", empresaId: null, area: "", cargo: "", ativo: true, podeResponsavel: true, podeSponsor: true, observacoes: "", iniciais: PEOPLE.clara.iniciais }],
+            listas: Object.entries(DEFAULT_LISTS).map(([listId, def]) => ({ id: listId, itens: def.itens })),
+            identidadeVisual: [IDENTIDADE_VISUAL_PADRAO],
+          };
           for (const [name, arr] of Object.entries(seedData)) {
             await Promise.all(arr.map((rec) => d.collection(name).doc(rec.id).set(rec)));
+          }
+          if (!cancelled) {
+            setPessoas(seedData.pessoas);
+            const obj = {}; seedData.listas.forEach((doc) => { obj[doc.id] = doc.itens; });
+            setListas((prev) => ({ ...prev, ...obj }));
+            setIdentidadeVisual(IDENTIDADE_VISUAL_PADRAO);
           }
           await d.doc("meta/seed").set({ done: true, seededAt: new Date().toISOString() });
           await d.doc("meta/materiaisMigration").set({ done: true, migratedAt: new Date().toISOString() });
           await d.doc("meta/projetosMarcosSeed").set({ done: true, seededAt: new Date().toISOString() });
+          await d.doc("meta/configuracoesMigration").set({ done: true, migratedAt: new Date().toISOString() });
         }
         if (!cancelled) setDbStatus("ready");
       } catch (e) {
@@ -1640,7 +1906,7 @@ function App() {
     try {
       const project = note.projectId ? projectById(note.projectId) : null;
       const meeting = note.meetingId ? meetings.find((m) => m.id === note.meetingId) : null;
-      const blob = await buildNoteDocx(note, project, meeting);
+      const blob = await buildNoteDocx(note, project, meeting, identidadeVisual.nomeApp);
       await downloadsRef.current.save({ filename: slugifyFilename(note.titulo) + ".docx", data: blob });
       setToast("Nota exportada para Word.");
     } catch (e) {
@@ -1651,8 +1917,16 @@ function App() {
   }
 
   /* ------------------- backup: exportar/importar ------------------- */
-  const BACKUP_COLLECTIONS = { tasks, meetings, decisions, pendencies, risks, changes, diary, notes, reminders, documents, projetos: projects, marcos: milestones };
-  const BACKUP_SETTERS = { tasks: setTasks, meetings: setMeetings, decisions: setDecisions, pendencies: setPendencies, risks: setRisks, changes: setChanges, diary: setDiary, notes: setNotes, reminders: setReminders, documents: setDocuments, projetos: setProjects, marcos: setMilestones };
+  const BACKUP_COLLECTIONS = {
+    tasks, meetings, decisions, pendencies, risks, changes, diary, notes, reminders, documents, projetos: projects, marcos: milestones,
+    empresas, pessoas, listas: listasToArrayDocs(listas), identidadeVisual: [identidadeVisual],
+  };
+  const BACKUP_SETTERS = {
+    tasks: setTasks, meetings: setMeetings, decisions: setDecisions, pendencies: setPendencies, risks: setRisks, changes: setChanges, diary: setDiary, notes: setNotes, reminders: setReminders, documents: setDocuments, projetos: setProjects, marcos: setMilestones,
+    empresas: setEmpresas, pessoas: setPessoas,
+    listas: (arr) => { const obj = {}; arr.forEach((doc) => { obj[doc.id] = doc.itens || []; }); setListas((prev) => ({ ...prev, ...obj })); },
+    identidadeVisual: (arr) => { if (arr[0]) setIdentidadeVisual(arr[0]); },
+  };
 
   /* limpa todos os dados (local + Google Drive), mantendo o mesmo arquivo — usado para reaproveitar
      o protótipo do zero, por exemplo ao trocar de empresa */
@@ -1663,13 +1937,15 @@ function App() {
     if (driveStateRef.current) {
       collections.forEach((name) => { driveStateRef.current.collections[name] = {}; });
       driveStateRef.current.meta["projetosMarcosSeed"] = { done: true, limpoEm: new Date().toISOString() };
-      scheduleDriveSave();
+      scheduleDriveSave().catch((e) => console.warn("Falha ao salvar limpeza de dados no Google Drive:", e));
     }
     setToast("Dados limpos. Pronto para começar do zero.");
   }
 
+  /* devolve true (backup realmente gerado e baixado) ou false (falhou ou foi cancelado) — quem chama
+     (ex.: "Exportar tudo e limpar dados") depende desse retorno para decidir se pode prosseguir */
   async function downloadBackup() {
-    if (!downloadsRef.current) { setToast("Exportação de backup não está disponível nesta visualização."); return; }
+    if (!downloadsRef.current) { setToast("Exportação de backup não está disponível nesta visualização."); return false; }
     try {
       const payload = {
         formatVersion: 2,
@@ -1680,44 +1956,45 @@ function App() {
       const filename = "central-projetos-backup-" + TODAY + ".json";
       await downloadsRef.current.save({ filename, data: blob });
       setToast("Backup exportado.");
+      return true;
     } catch (e) {
-      if (e && e.code === "declined") return;
+      if (e && e.code === "declined") return false;
       console.warn("Falha ao exportar backup:", e);
       setToast("Não foi possível exportar o backup.");
+      return false;
     }
   }
 
+  /* substitui uma coleção inteira no Google Drive — não engole erros: quem chama (importBackup)
+     precisa saber se alguma gravação falhou antes de anunciar a restauração como concluída */
   async function replaceCollection(name, newArr) {
     const d = dbRef.current;
     if (!d || !Array.isArray(newArr)) return;
-    try {
-      const snap = await d.collection(name).get();
-      const oldIds = new Set(snap.docs.map((doc) => doc.id));
-      const newIds = new Set(newArr.map((r) => r.id));
-      const toDelete = [...oldIds].filter((id) => !newIds.has(id));
-      await Promise.all([
-        ...toDelete.map((id) => d.collection(name).doc(id).delete()),
-        ...newArr.map((rec) => d.collection(name).doc(rec.id).set(rec)),
-      ]);
-    } catch (e) {
-      console.warn("Falha ao substituir coleção", name, e);
-    }
+    const snap = await d.collection(name).get();
+    const oldIds = new Set(snap.docs.map((doc) => doc.id));
+    const newIds = new Set(newArr.map((r) => r.id));
+    const toDelete = [...oldIds].filter((id) => !newIds.has(id));
+    await Promise.all([
+      ...toDelete.map((id) => d.collection(name).doc(id).delete()),
+      ...newArr.map((rec) => d.collection(name).doc(rec.id).set(rec)),
+    ]);
   }
 
   async function importBackup(parsed) {
     const data = parsed && parsed.data;
     if (!data || typeof data !== "object") { setToast("Arquivo de backup inválido."); return false; }
-    const map = [
-      ["tasks", setTasks], ["meetings", setMeetings], ["decisions", setDecisions], ["pendencies", setPendencies],
-      ["risks", setRisks], ["changes", setChanges], ["diary", setDiary], ["notes", setNotes],
-      ["reminders", setReminders], ["documents", setDocuments], ["projetos", setProjects], ["marcos", setMilestones],
-    ];
-    map.forEach(([name, setter]) => {
-      if (Array.isArray(data[name])) {
-        setter(data[name]);
-        replaceCollection(name, data[name]);
-      }
-    });
+    const map = Object.entries(BACKUP_SETTERS);
+    const toApply = map.filter(([name]) => Array.isArray(data[name]));
+    // atualiza a tela de imediato (resposta visual rápida), mas só anuncia a restauração como
+    // concluída depois que todas as gravações no Google Drive tiverem sido confirmadas
+    toApply.forEach(([name, setter]) => setter(data[name]));
+    try {
+      await Promise.all(toApply.map(([name]) => replaceCollection(name, data[name])));
+    } catch (e) {
+      console.warn("Falha ao restaurar backup:", e);
+      setToast("Erro ao restaurar backup no Google Drive — os dados na tela foram atualizados, mas nem tudo foi salvo. Tente novamente.");
+      return false;
+    }
     setToast("Backup restaurado — dados atuais substituídos.");
     return true;
   }
@@ -1786,7 +2063,7 @@ function App() {
   /* --------------------------------- notas (editor completo) --------------------------------- */
   function nowHora() { const n = new Date(); return String(n.getHours()).padStart(2, "0") + ":" + String(n.getMinutes()).padStart(2, "0"); }
   /* cria a nota já no primeiro autosave do editor — só esse momento gera registro no Diário */
-  function addNote({ titulo, conteudo, conteudoHtml, categoria, tags, materiaisRelacionados, projectId, meetingId }) {
+  function addNote({ titulo, conteudo, conteudoHtml, categoria, tags, materiaisRelacionados, projectId, meetingId, origemTipo, origemArquivo }) {
     const hora = nowHora();
     const id = "n" + (Date.now() % 100000) + Math.floor(Math.random() * 99);
     const html = conteudoHtml != null ? conteudoHtml : plainTextToHtml(conteudo);
@@ -1795,10 +2072,20 @@ function App() {
       titulo: (titulo || "").trim() || "Nota sem título",
       categoria: categoria || null, tags: Array.isArray(tags) ? tags : [], materiaisRelacionados: Array.isArray(materiaisRelacionados) ? materiaisRelacionados : [],
       conteudoHtml: html, conteudo: conteudo != null ? conteudo : htmlToPlainText(html),
+      /* origemTipo: "Anotação" (padrão) | "Ata" | "Transcrição" — só é diferente de "Anotação" quando a nota
+         nasce de uma importação de Word (ver ImportarWordModal); origemArquivo guarda o nome do .docx importado,
+         só para referência — o arquivo original em si não é armazenado (ver limitações da Fase 1). */
+      origemTipo: origemTipo || "Anotação", origemArquivo: origemArquivo || null,
       criadoEm: TODAY, criadoHora: hora, editadoEm: TODAY, editadoHora: hora,
     };
+    /* rec._persisted: promise que só resolve depois da confirmação real (response.ok) do Google
+       Drive — usada pelo autosave do editor de notas para saber quando pode mostrar "salvo" de
+       verdade no primeiro salvamento de uma nota nova (addNote não pode virar async porque outros
+       pontos do app dependem de receber o registro, com o id, de forma síncrona). */
+    const persistPromise = persistDocAwaitable("notes", id, rec);
+    rec._persisted = persistPromise;
+    persistPromise.catch((e) => console.warn("Falha ao salvar", "notes", id, e));
     setNotes((prev) => [rec, ...prev]);
-    persistDoc("notes", id, rec);
     if (rec.projectId) {
       addDiaryEntry({
         projectId: rec.projectId, data: TODAY, hora, tipo: "atualizacao",
@@ -1879,6 +2166,133 @@ function App() {
     if (arquivado && route.view === "project" && route.projectId === id) navigate("portfolio");
   }
 
+  /* --------------------------------- empresas --------------------------------- */
+  function addEmpresa(partial) {
+    const id = "emp" + (Date.now() % 100000) + Math.floor(Math.random() * 99);
+    const rec = {
+      id, nome: (partial.nome || "").trim() || "Nova empresa", nomeCurto: partial.nomeCurto || "", sigla: partial.sigla || "",
+      descricao: partial.descricao || "", ativa: partial.ativa !== false, corIniciais: partial.corIniciais || "",
+      dominioEmail: partial.dominioEmail || "", observacoes: partial.observacoes || "",
+    };
+    setEmpresas((prev) => [...prev, rec]);
+    persistDoc("empresas", id, rec);
+    return rec;
+  }
+  function updateEmpresa(id, patch) {
+    let next = null;
+    setEmpresas((prev) => prev.map((e) => { if (e.id !== id) return e; next = { ...e, ...patch }; return next; }));
+    if (next) persistDoc("empresas", id, next);
+  }
+  function setEmpresaAtiva(id, ativa) { updateEmpresa(id, { ativa }); }
+
+  /* --------------------------------- pessoas --------------------------------- */
+  function addPessoa(partial) {
+    const id = "pe" + (Date.now() % 100000) + Math.floor(Math.random() * 99);
+    const nome = (partial.nome || "").trim() || "Nova pessoa";
+    const rec = {
+      id, nome, email: partial.email || "", empresaId: partial.empresaId || null, area: partial.area || "", cargo: partial.cargo || "",
+      ativo: partial.ativo !== false, podeResponsavel: partial.podeResponsavel !== false, podeSponsor: !!partial.podeSponsor,
+      observacoes: partial.observacoes || "", iniciais: partial.iniciais || initialsFromName(nome),
+    };
+    setPessoas((prev) => [...prev, rec]);
+    persistDoc("pessoas", id, rec);
+    return rec;
+  }
+  function updatePessoa(id, patch) {
+    let next = null;
+    setPessoas((prev) => prev.map((p) => { if (p.id !== id) return p; next = { ...p, ...patch }; return next; }));
+    if (next) persistDoc("pessoas", id, next);
+  }
+  function setPessoaAtiva(id, ativo) { updatePessoa(id, { ativo }); }
+
+  /* ----------------------------- listas e categorias configuráveis ----------------------------- */
+  /* cada lista é persistida como UM documento (id = listId) com um array "itens" — qualquer alteração
+     num item reescreve a lista inteira. "id" de um item nunca muda depois de criado (é o que fica
+     gravado nos registros que o usam); "nome" é livremente editável. */
+  function slugForListItem(nome, existingIds) {
+    let base = normalize(nome).replace(/[^a-z0-9]+/g, "_").replace(/(^_+|_+$)/g, "") || "item";
+    let slug = base, n = 2;
+    while (existingIds.includes(slug)) { slug = base + "_" + n; n++; }
+    return slug;
+  }
+  function persistLista(listId, itens) { persistDoc("listas", listId, { id: listId, itens }); }
+  function addListItem(listId, nome) {
+    const nomeTrim = (nome || "").trim();
+    if (!nomeTrim) return null;
+    const atuais = listas[listId] || [];
+    const id = slugForListItem(nomeTrim, atuais.map((i) => i.id));
+    const item = { id, nome: nomeTrim, ativo: true, ordem: atuais.length, systemRole: null };
+    const next = [...atuais, item];
+    setListas((prev) => ({ ...prev, [listId]: next }));
+    persistLista(listId, next);
+    return item;
+  }
+  function updateListItem(listId, itemId, patch) {
+    const atuais = listas[listId] || [];
+    const next = atuais.map((i) => (i.id === itemId ? { ...i, ...patch } : i));
+    setListas((prev) => ({ ...prev, [listId]: next }));
+    persistLista(listId, next);
+  }
+  function toggleListItemAtivo(listId, itemId) {
+    const atual = (listas[listId] || []).find((i) => i.id === itemId);
+    if (atual) updateListItem(listId, itemId, { ativo: !atual.ativo });
+  }
+  function moveListItem(listId, itemId, direction) {
+    const atuais = [...(listas[listId] || [])].sort((a, b) => a.ordem - b.ordem);
+    const idx = atuais.findIndex((i) => i.id === itemId);
+    const swapWith = idx + direction;
+    if (idx < 0 || swapWith < 0 || swapWith >= atuais.length) return;
+    const a = atuais[idx].ordem, b = atuais[swapWith].ordem;
+    atuais[idx] = { ...atuais[idx], ordem: b };
+    atuais[swapWith] = { ...atuais[swapWith], ordem: a };
+    setListas((prev) => ({ ...prev, [listId]: atuais }));
+    persistLista(listId, atuais);
+  }
+  /* onde cada lista é usada, para impedir exclusão definitiva de itens já utilizados (ficam só
+     desativados) — ver ponto "Evitar exclusão definitiva de itens já utilizados" */
+  function isListItemInUse(listId, itemId) {
+    const checkers = {
+      projeto_status: (id) => projects.some((p) => p.status === id),
+      projeto_saude: (id) => projects.some((p) => p.saude === id),
+      projeto_prioridade: (id) => projects.some((p) => p.prioridade === id),
+      projeto_area: (id) => projects.some((p) => p.area === id),
+      tarefa_status: (id) => tasks.some((t) => t.status === id),
+      tarefa_prioridade: (id) => tasks.some((t) => t.prioridade === id),
+      decisao_status: (id) => decisions.some((d) => d.status === id),
+      pendencia_status: (id) => pendencies.some((p) => p.status === id),
+      pendencia_prioridade: (id) => pendencies.some((p) => p.prioridade === id),
+      risco_tipo: (id) => risks.some((r) => r.tipo === id),
+      risco_status: (id) => risks.some((r) => r.status === id),
+      risco_probabilidade: (id) => risks.some((r) => r.probabilidade === id),
+      risco_impacto: (id) => risks.some((r) => r.impacto === id),
+      marco_status: (id) => milestones.some((m) => m.status === id),
+      material_tipo: (id) => documents.some((d) => d.categoria === id),
+      material_classificacao: (id) => documents.some((d) => d.classificacao === id),
+      nota_categoria: (id) => notes.some((n) => n.categoria === id),
+      nota_tag_sugerida: (id) => notes.some((n) => (n.tags || []).includes(id)),
+      mudanca_tipo: (id) => changes.some((c) => c.tipo === id),
+      reuniao_categoria: (id) => meetings.some((m) => m.categoria === id),
+    };
+    return checkers[listId] ? checkers[listId](itemId) : false;
+  }
+  function deleteListItem(listId, itemId) {
+    const item = (listas[listId] || []).find((i) => i.id === itemId);
+    if (!item) return { ok: false, motivo: "Item não encontrado." };
+    if (item.systemRole) return { ok: false, motivo: "Este item é usado internamente pelo app e não pode ser excluído — desative-o em vez de excluir." };
+    if (isListItemInUse(listId, itemId)) return { ok: false, motivo: "Este item já está em uso em um ou mais registros e não pode ser excluído — desative-o em vez de excluir." };
+    const next = (listas[listId] || []).filter((i) => i.id !== itemId);
+    setListas((prev) => ({ ...prev, [listId]: next }));
+    persistLista(listId, next);
+    return { ok: true };
+  }
+
+  /* ----------------------------- identidade visual ----------------------------- */
+  function updateIdentidadeVisual(patch) {
+    const next = { ...identidadeVisual, ...patch };
+    setIdentidadeVisual(next);
+    persistDoc("identidadeVisual", "config", next);
+  }
+
   /* --------------------------- marcos editáveis --------------------------- */
   function addMilestone(partial) {
     const id = "ms" + (Date.now() % 100000) + Math.floor(Math.random() * 99);
@@ -1950,32 +2364,65 @@ function App() {
     addDiaryEntry({ projectId, data: rec.data, hora: rec.horario, tipo: "reuniao", titulo: "Reunião registrada — " + rec.titulo, descricao: "Registrada manualmente via + Novo.", relacionado: { tipo: "reuniao", id } });
     return rec;
   }
-  function addDecisionManual({ decisao, projectId, contexto, motivo, responsavel }) {
+  function addDecisionManual(partial) {
     const id = "d" + (Date.now() % 100000) + Math.floor(Math.random() * 99);
     const rec = {
-      id, projectId, data: TODAY, decisao: (decisao || "").trim() || "Decisão sem título",
-      contexto: contexto || "", motivo: motivo || "", alternativas: "", participantes: [],
-      responsavel: responsavel || "clara", impacto: "A avaliar", status: "Em análise",
-      reuniaoOrigemId: null, documentosRelacionadosIds: [],
+      id, projectId: partial.projectId, data: partial.data || TODAY, decisao: (partial.decisao || "").trim() || "Decisão sem título",
+      contexto: partial.contexto || "", motivo: partial.motivo || "", alternativas: partial.alternativas || "", participantes: partial.participantes || [],
+      responsavel: partial.responsavel || "clara", impacto: partial.impacto || "A avaliar", status: partial.status || "Em análise",
+      reuniaoOrigemId: partial.reuniaoOrigemId || null, documentosRelacionadosIds: partial.documentosRelacionadosIds || [],
+      observacoes: partial.observacoes || "",
     };
     setDecisions((prev) => [rec, ...prev]);
     persistDoc("decisions", id, rec);
-    addDiaryEntry({ projectId, data: TODAY, hora: "", tipo: "decisao", titulo: "Decisão registrada — " + rec.decisao, descricao: "Registrada manualmente via + Novo.", relacionado: { tipo: "decisao", id } });
+    addDiaryEntry({ projectId: rec.projectId, data: TODAY, hora: "", tipo: "decisao", titulo: "Decisão registrada — " + rec.decisao, descricao: "Registrada manualmente.", relacionado: { tipo: "decisao", id } });
     return rec;
   }
-  function addPendencyManual({ pendencia, projectId, dependeDe, prazo, responsavel }) {
+  function updateDecisionRecord(id, patch) {
+    let next = null;
+    setDecisions((prev) => prev.map((d) => { if (d.id !== id) return d; next = { ...d, ...patch }; return next; }));
+    if (next) persistDoc("decisions", id, next);
+  }
+  function addPendencyManual(partial) {
     const id = "pd" + (Date.now() % 100000) + Math.floor(Math.random() * 99);
     const rec = {
-      id, pendencia: (pendencia || "").trim() || "Pendência sem título", projectId,
-      responsavel: responsavel || "clara", dependeDe: dependeDe || responsavel || "clara",
-      dataAbertura: TODAY, prazo: prazo || null, status: "Aberta", prioridade: "Média",
-      ultimoFollowUp: TODAY, proximoAcompanhamento: prazo || null,
-      origem: { tipo: "manual" }, observacoes: "",
+      id, pendencia: (partial.pendencia || "").trim() || "Pendência sem título", projectId: partial.projectId,
+      responsavel: partial.responsavel || "clara", dependeDe: partial.dependeDe || partial.responsavel || "clara",
+      dataAbertura: partial.dataAbertura || TODAY, prazo: partial.prazo || null, status: partial.status || "Aberta", prioridade: partial.prioridade || "Média",
+      ultimoFollowUp: partial.ultimoFollowUp || TODAY, proximoAcompanhamento: partial.proximoAcompanhamento || partial.prazo || null,
+      origem: partial.origem || { tipo: "manual" }, reuniaoOrigemId: partial.reuniaoOrigemId || null, observacoes: partial.observacoes || "",
     };
     setPendencies((prev) => [rec, ...prev]);
     persistDoc("pendencies", id, rec);
-    addDiaryEntry({ projectId, data: TODAY, hora: "", tipo: "pendencia", titulo: "Pendência registrada — " + rec.pendencia, descricao: "Registrada manualmente via + Novo.", relacionado: { tipo: "pendencia", id } });
+    addDiaryEntry({ projectId: rec.projectId, data: TODAY, hora: "", tipo: "pendencia", titulo: "Pendência registrada — " + rec.pendencia, descricao: "Registrada manualmente.", relacionado: { tipo: "pendencia", id } });
     return rec;
+  }
+  function updatePendencyRecord(id, patch) {
+    let next = null;
+    setPendencies((prev) => prev.map((p) => { if (p.id !== id) return p; next = { ...p, ...patch }; return next; }));
+    if (next) persistDoc("pendencies", id, next);
+  }
+  /* Riscos, ao contrário de Decisões/Pendências, ainda não tinham nenhuma criação manual — só entravam
+     via revisão de IA de reunião. Esta é a primeira forma completa de criação/edição manual. */
+  function addRiskManual(partial) {
+    const id = "r" + (Date.now() % 100000) + Math.floor(Math.random() * 99);
+    const rec = {
+      id, tipo: partial.tipo || "Risco", projectId: partial.projectId, descricao: partial.descricao || "",
+      causa: partial.causa || "", consequencia: partial.consequencia || "",
+      probabilidade: partial.probabilidade || null, impacto: partial.impacto || null,
+      responsavel: partial.responsavel || "clara", planoAcao: partial.planoAcao || "",
+      prazo: partial.prazo || null, status: partial.status || "Ativo",
+      origem: partial.origem || { tipo: "manual" }, reuniaoOrigemId: partial.reuniaoOrigemId || null, observacoes: partial.observacoes || "",
+    };
+    setRisks((prev) => [rec, ...prev]);
+    persistDoc("risks", id, rec);
+    addDiaryEntry({ projectId: rec.projectId, data: TODAY, hora: "", tipo: "risco", titulo: rec.tipo + " registrado — " + rec.descricao, descricao: "Registrado manualmente.", relacionado: { tipo: "risco", id } });
+    return rec;
+  }
+  function updateRiskRecord(id, patch) {
+    let next = null;
+    setRisks((prev) => prev.map((r) => { if (r.id !== id) return r; next = { ...r, ...patch }; return next; }));
+    if (next) persistDoc("risks", id, next);
   }
 
   /* --------------------------------- lembretes --------------------------------- */
@@ -2099,7 +2546,7 @@ function App() {
   /* --------------------------------- índice de busca --------------------------------- */
   const searchIndex = useMemo(() => {
     const idx = [];
-    projects.forEach((p) => idx.push({ type: "projeto", id: p.id, title: p.nome, subtitle: `${p.area} · ${p.status}${p.arquivado ? " · Arquivado" : ""}`, projectId: p.id }));
+    projects.forEach((p) => idx.push({ type: "projeto", id: p.id, title: p.nome, subtitle: `${p.area} · ${p.status}${p.arquivado ? " · Arquivado" : ""}`, projectId: p.id, extra: empresaLabel(p.empresaId) }));
     meetings.forEach((m) => idx.push({ type: "reuniao", id: m.id, title: m.titulo, subtitle: `${projectById(m.projectId).nome} · ${fmtDate(m.data)}`, projectId: m.projectId }));
     decisions.forEach((d) => idx.push({ type: "decisao", id: d.id, title: d.decisao, subtitle: `${projectById(d.projectId).nome} · ${d.status}`, projectId: d.projectId }));
     pendencies.forEach((p) => idx.push({ type: "pendencia", id: p.id, title: p.pendencia, subtitle: `${projectById(p.projectId).nome} · ${p.status}`, projectId: p.projectId }));
@@ -2117,7 +2564,7 @@ function App() {
     }));
     reminders.forEach((r) => idx.push({ type: "lembrete", id: r.id, title: r.texto, subtitle: r.projectId ? `${projectById(r.projectId).nome} · Lembrete` : "Geral · Lembrete", projectId: r.projectId }));
     return idx;
-  }, [projects, meetings, decisions, pendencies, documents, tasks, diary, risks, changes, milestones, notes, reminders]);
+  }, [projects, meetings, decisions, pendencies, documents, tasks, diary, risks, changes, milestones, notes, reminders, empresas]);
   // (indexação de "documents" já cobre os antigos registros de RESOURCES, migrados para essa coleção)
 
   const searchResults = useMemo(() => {
@@ -2130,19 +2577,31 @@ function App() {
   function closeProjectForm() { setProjectForm(null); }
   function openMilestoneForm(projectId, milestone) { setMilestoneForm({ mode: milestone ? "edit" : "create", projectId, milestone: milestone || null }); }
   function closeMilestoneForm() { setMilestoneForm(null); }
+  function openDecisionForm(projectId, decision) { setDecisionForm({ mode: decision ? "edit" : "create", projectId, decision: decision || null }); }
+  function closeDecisionForm() { setDecisionForm(null); }
+  function openPendencyForm(projectId, pendency) { setPendencyForm({ mode: pendency ? "edit" : "create", projectId, pendency: pendency || null }); }
+  function closePendencyForm() { setPendencyForm(null); }
+  function openRiskForm(projectId, risk) { setRiskForm({ mode: risk ? "edit" : "create", projectId, risk: risk || null }); }
+  function closeRiskForm() { setRiskForm(null); }
   /* editor de anotação: navega para a tela cheia dedicada em vez de abrir modal/drawer */
   function openNoteEditor(noteId, opts = {}) { navigate("noteEditor", { noteId: noteId || "new", ...opts }); }
 
   /* dados agregados usados em várias telas */
   const ctx = { tasks, meetings, decisions, pendencies, risks, changes, diary, documents, milestones, notes, reminders, projects,
+    empresas, pessoas, listas, identidadeVisual,
     setTaskStatus, addTask, openDrawer, openProject, navigate, goToRecord, setQuickList, confirmAiSuggestions, addDiaryEntry,
     addNote, updateNote, deleteNote, openNoteEditor, addDocument, deleteDocument, addReminder, toggleReminder, deleteReminder,
     addChecklistItem, toggleChecklistItem, removeChecklistItem,
-    addMeetingManual, addDecisionManual, addPendencyManual,
+    addMeetingManual, addDecisionManual, updateDecisionRecord, addPendencyManual, updatePendencyRecord, addRiskManual, updateRiskRecord,
+    openDecisionForm, openPendencyForm, openRiskForm,
     addProject, updateProject, setProjectArchived, openProjectForm,
     addMilestone, updateMilestone, completeMilestone, cancelMilestone, openMilestoneForm,
-    downloadNoteAsWord, downloadsStatus, downloadBackup, importBackup, limparTudo, dbStatus, persistDocAwaitable, route,
-    authStatus, signInWithGoogle, signOutGoogle };
+    addEmpresa, updateEmpresa, setEmpresaAtiva,
+    addPessoa, updatePessoa, setPessoaAtiva,
+    addListItem, updateListItem, toggleListItemAtivo, moveListItem, deleteListItem, isListItemInUse,
+    updateIdentidadeVisual,
+    downloadNoteAsWord, downloadsStatus, downloadBackup, importBackup, limparTudo, dbStatus, driveSaveStatus, persistDocAwaitable, route,
+    authStatus, signInWithGoogle, signOutGoogle, setToast };
 
   if (authStatus !== "logado") {
     return (
@@ -2203,6 +2662,7 @@ function App() {
           {route.view === "notes" && <NotesView ctx={ctx} />}
           {route.view === "reminders" && <RemindersView ctx={ctx} />}
           {route.view === "backup" && <BackupView ctx={ctx} />}
+          {route.view === "settings" && <ConfiguracoesView ctx={ctx} route={route} navigate={navigate} />}
           {route.view === "noteEditor" && <NoteEditorView route={route} ctx={ctx} navigate={navigate} />}
         </div>
       </div>
@@ -2211,6 +2671,9 @@ function App() {
       {quickList && <QuickListModal data={quickList} onClose={() => setQuickList(null)} ctx={ctx} />}
       {projectForm && <ProjectFormModal data={projectForm} ctx={ctx} onClose={closeProjectForm} />}
       {milestoneForm && <MilestoneFormModal data={milestoneForm} ctx={ctx} onClose={closeMilestoneForm} />}
+      {decisionForm && <DecisionFormModal data={decisionForm} ctx={ctx} onClose={closeDecisionForm} />}
+      {pendencyForm && <PendencyFormModal data={pendencyForm} ctx={ctx} onClose={closePendencyForm} />}
+      {riskForm && <RiskFormModal data={riskForm} ctx={ctx} onClose={closeRiskForm} />}
       <NewItemButton ctx={ctx} />
       {toast && <div className="toast"><Icon name="check" size={15} />{toast}</div>}
     </div>
@@ -2226,10 +2689,12 @@ function Sidebar({ route, navigate, openProject, sidebarOpen, setSidebarOpen, th
   return (
     <aside className={cx("sidebar", sidebarOpen && "open")}>
       <div className="sidebar-brand">
-        <div className="sidebar-brand-mark">CP</div>
+        {ctx.identidadeVisual.logoDataUrl
+          ? <img src={ctx.identidadeVisual.logoDataUrl} alt="" className="sidebar-brand-mark" style={{ objectFit: "contain", background: "transparent" }} />
+          : <div className="sidebar-brand-mark">{initialsFromName(ctx.identidadeVisual.nomeApp || "Central de Projetos")}</div>}
         <div className="sidebar-brand-text">
-          <strong>Central de Projetos</strong>
-          <span>Versão pessoal</span>
+          <strong>{ctx.identidadeVisual.nomeApp || "Central de Projetos"}</strong>
+          <span>{ctx.identidadeVisual.subtitulo || "Versão pessoal"}</span>
         </div>
       </div>
 
@@ -2254,6 +2719,9 @@ function Sidebar({ route, navigate, openProject, sidebarOpen, setSidebarOpen, th
         <button className={cx("sidebar-link", route.view === "backup" && "active")} onClick={() => navigate("backup")}>
           <Icon className="icon" name="doc" /> Dados e Backup
         </button>
+        <button className={cx("sidebar-link", route.view === "settings" && "active")} onClick={() => navigate("settings")}>
+          <Icon className="icon" name="settings" /> Configurações
+        </button>
       </nav>
 
       <div className="sidebar-section-title" style={{ display: "flex", alignItems: "center", justifyContent: "space-between", paddingRight: 4 }}>
@@ -2275,28 +2743,35 @@ function Sidebar({ route, navigate, openProject, sidebarOpen, setSidebarOpen, th
         <span className="sidebar-user-avatar">AC</span>
         <div className="sidebar-footer-text">
           <strong>Ana Clara</strong>
-          <span>Analista de Projetos e Processos</span>
+          <span>Gestão de Projetos</span>
         </div>
         <button className="theme-toggle" title="Alternar tema"
           onClick={() => setTheme(theme === "dark" ? "light" : theme === "light" ? "system" : "dark")}>
           {theme === "dark" ? "☾" : theme === "light" ? "☀" : "◐"}
         </button>
       </div>
-      <DbStatusLine status={dbStatus} onSignOut={ctx.signOutGoogle} />
+      <DbStatusLine status={dbStatus} saveStatus={ctx.driveSaveStatus} onSignOut={ctx.signOutGoogle} />
     </aside>
   );
 }
 
-function DbStatusLine({ status, onSignOut }) {
+function DbStatusLine({ status, saveStatus, onSignOut }) {
   const map = {
     checking: { dot: "neutral", text: "Verificando armazenamento…" },
     seeding: { dot: "info", text: "Preparando seu Google Drive…" },
     loading: { dot: "info", text: "Carregando seus dados do Drive…" },
-    ready: { dot: "success", text: "Alterações salvas no seu Google Drive" },
     unavailable: { dot: "neutral", text: "Alterações não são salvas nesta visualização" },
     error: { dot: "danger", text: "Erro ao salvar — tentando de novo" },
   };
-  const s = map[status] || map.checking;
+  /* quando o armazenamento já está pronto ("ready"), o estado exibido passa a refletir o
+     salvamento em si (driveSaveStatus), em vez de afirmar "salvo" só porque a inicialização terminou */
+  const saveMap = {
+    idle: { dot: "success", text: "Conectado ao Google Drive" },
+    saving: { dot: "info", text: "Salvando alterações…" },
+    saved: { dot: "success", text: "Alterações salvas" },
+    error: { dot: "danger", text: "Erro ao salvar" },
+  };
+  const s = status === "ready" ? (saveMap[saveStatus] || saveMap.idle) : (map[status] || map.checking);
   return (
     <div className="db-status" title="Os dados ficam salvos num arquivo no seu Google Drive pessoal" style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
       <span><span className={cx("db-status-dot", "tone-" + s.dot)} />{s.text}</span>
@@ -2308,7 +2783,7 @@ function DbStatusLine({ status, onSignOut }) {
 /* ==================================================================================
    TOPBAR + BUSCA
    ================================================================================== */
-const TITLES = { portfolio: "Central de Projetos", central: "Minha Central", search: "Busca geral", planning: "Calendário & Cronograma", notes: "Anotações", reminders: "Lembretes", backup: "Dados e Backup" };
+const TITLES = { portfolio: "Central de Projetos", central: "Minha Central", search: "Busca geral", planning: "Calendário & Cronograma", notes: "Anotações", reminders: "Lembretes", backup: "Dados e Backup", settings: "Configurações" };
 function Topbar({ route, navigate, setSidebarOpen, searchQuery, setSearchQuery, searchResults, searchFocused, setSearchFocused, goToRecord }) {
   const blurTimeout = useRef(null);
   const project = route.view === "project" ? projectById(route.projectId) : null;
@@ -2381,7 +2856,7 @@ function Topbar({ route, navigate, setSidebarOpen, searchQuery, setSearchQuery, 
    CENTRAL DE PROJETOS (PORTFÓLIO)
    ================================================================================== */
 function PortfolioView({ ctx }) {
-  const [filters, setFilters] = useState({ status: "Todos", saude: "Todas", area: "Todas", prioridade: "Todas", responsavel: "Todos", periodo: "Todos", arquivado: "ativos" });
+  const [filters, setFilters] = useState({ status: "Todos", saude: "Todas", area: "Todas", empresa: "Todas", prioridade: "Todas", responsavel: "Todos", periodo: "Todos", arquivado: "ativos" });
   const [viewMode, setViewMode] = useState("cards");
   const { tasks, pendencies, decisions, milestones, diary, openProject, setQuickList, goToRecord } = ctx;
   const allProjects = ctx.projects;
@@ -2404,11 +2879,12 @@ function PortfolioView({ ctx }) {
     (filters.status === "Todos" || p.status === filters.status) &&
     (filters.saude === "Todas" || p.saude === filters.saude) &&
     (filters.area === "Todas" || p.area === filters.area) &&
+    (filters.empresa === "Todas" || (filters.empresa === "__pessoal__" ? !p.empresaId : p.empresaId === filters.empresa)) &&
     (filters.prioridade === "Todas" || p.prioridade === filters.prioridade) &&
     (filters.responsavel === "Todos" || p.responsavel === filters.responsavel) &&
     matchesPeriodo(p)
   );
-  const defaultFilters = { status: "Todos", saude: "Todas", area: "Todas", prioridade: "Todas", responsavel: "Todos", periodo: "Todos", arquivado: "ativos" };
+  const defaultFilters = { status: "Todos", saude: "Todas", area: "Todas", empresa: "Todas", prioridade: "Todas", responsavel: "Todos", periodo: "Todos", arquivado: "ativos" };
   const filtersActive = Object.keys(defaultFilters).some((k) => filters[k] !== defaultFilters[k]);
 
   /* KPIs — sempre calculados sobre projetos ativos (não arquivados) */
@@ -2454,17 +2930,24 @@ function PortfolioView({ ctx }) {
           <option value="arquivados">Somente arquivados</option>
         </select>
         <select value={filters.status} onChange={(e) => setFilters({ ...filters, status: e.target.value })}>
-          {["Todos", ...PROJECT_STATUS_OPTIONS].map((s) => <option key={s}>{s}</option>)}
+          <option value="Todos">Todos</option>
+          {(ctx.listas.projeto_status || []).filter((i) => i.ativo).map((i) => <option key={i.id} value={i.id}>{i.nome}</option>)}
         </select>
         <select value={filters.saude} onChange={(e) => setFilters({ ...filters, saude: e.target.value })} title="Filtra pela saúde do projeto">
           <option value="Todas">Saúde: todas</option>
-          {PROJECT_SAUDE_OPTIONS.map((s) => <option key={s} value={s}>Saúde: {s}</option>)}
+          {(ctx.listas.projeto_saude || []).filter((i) => i.ativo).map((i) => <option key={i.id} value={i.id}>Saúde: {i.nome}</option>)}
         </select>
         <select value={filters.area} onChange={(e) => setFilters({ ...filters, area: e.target.value })}>
           <option>Todas</option>{areas.map((a) => <option key={a}>{a}</option>)}
         </select>
+        <select value={filters.empresa} onChange={(e) => setFilters({ ...filters, empresa: e.target.value })} title="Filtra por empresa">
+          <option value="Todas">Empresa: todas</option>
+          <option value="__pessoal__">Pessoal / Sem empresa</option>
+          {ctx.empresas.filter((e) => e.ativa).map((e) => <option key={e.id} value={e.id}>{e.nome}</option>)}
+        </select>
         <select value={filters.prioridade} onChange={(e) => setFilters({ ...filters, prioridade: e.target.value })}>
-          {["Todas", "Alta", "Média", "Baixa"].map((s) => <option key={s}>{s}</option>)}
+          <option value="Todas">Todas</option>
+          {(ctx.listas.projeto_prioridade || []).filter((i) => i.ativo).map((i) => <option key={i.id} value={i.id}>{i.nome}</option>)}
         </select>
         <select value={filters.responsavel} onChange={(e) => setFilters({ ...filters, responsavel: e.target.value })}>
           <option>Todos</option>{responsaveis.map((r) => <option key={r} value={r}>{personLabel(r)}</option>)}
@@ -2549,7 +3032,7 @@ function ProjectCard({ project: p, ctx }) {
       <div className="project-card-top">
         <div>
           <div className="project-card-title">{p.nome}</div>
-          <div className="project-card-area">{p.area}</div>
+          <div className="project-card-area">{[p.area, empresaLabel(p.empresaId)].filter(Boolean).join(" · ")}</div>
         </div>
         <div style={{ display: "flex", flexDirection: "column", gap: 4, alignItems: "flex-end" }}>
           {p.arquivado && <Pill tone="neutral"><Icon name="archive" size={10} /> Arquivado</Pill>}
@@ -2592,7 +3075,7 @@ function ProjectsTable({ projects, ctx }) {
       <table className="data-table">
         <thead>
           <tr>
-            <th>Projeto</th><th>Responsável</th><th>Sponsor</th><th>Prioridade</th><th>Status</th><th>Saúde</th><th>Evolução</th>
+            <th>Projeto</th><th>Empresa</th><th>Responsável</th><th>Sponsor</th><th>Prioridade</th><th>Status</th><th>Saúde</th><th>Evolução</th>
             <th>Início</th><th>Prazo</th><th>Próxima ação</th><th>Pendências</th><th>Tarefas</th><th>Riscos</th><th>Atualizado</th>
           </tr>
         </thead>
@@ -2603,6 +3086,7 @@ function ProjectsTable({ projects, ctx }) {
             return (
               <tr key={p.id} onClick={() => ctx.openProject(p.id)}>
                 <td className="table-name-cell"><strong>{p.nome}</strong><span>{p.area}</span></td>
+                <td>{empresaLabel(p.empresaId)}</td>
                 <td><PersonChip personKey={p.responsavel} /></td>
                 <td>{p.sponsor ? <PersonChip personKey={p.sponsor} /> : "—"}</td>
                 <td><span className={cx("priority-tag", priorityClass(p.prioridade))}>{p.prioridade}</span></td>
@@ -2821,6 +3305,7 @@ function ProjectView({ route, ctx, navigate }) {
               <Pill tone={saudeTone(project.saude)}>Saúde: {project.saude}</Pill>
               <span className={cx("priority-tag", priorityClass(project.prioridade))}>Prioridade {project.prioridade}</span>
               <Pill tone="neutral">{project.area}</Pill>
+              <Pill tone="info">{empresaLabel(project.empresaId)}</Pill>
             </div>
             <h1>{project.nome}</h1>
             <p className="objetivo">{project.objetivo}</p>
@@ -3166,8 +3651,8 @@ function MateriaisTab({ project, ctx }) {
   const [cat, setCat] = useState("Todas");
   const [classif, setClassif] = useState("Todas");
   const [nome, setNome] = useState("");
-  const [tipoMaterial, setTipoMaterial] = useState(MATERIAL_TIPO_OPTIONS[0]);
-  const [classificacao, setClassificacao] = useState(MATERIAL_CLASSIFICACAO_OPTIONS[1]);
+  const [tipoMaterial, setTipoMaterial] = useState("");
+  const [classificacao, setClassificacao] = useState("Material de apoio");
   const [link, setLink] = useState("");
 
   const all = ctx.documents.filter((d) => d.projectId === project.id);
@@ -3189,12 +3674,8 @@ function MateriaisTab({ project, ctx }) {
 
       <form className="quick-add" onSubmit={handleAdd} style={{ flexWrap: "wrap" }}>
         <input type="text" placeholder="Nome do material" value={nome} onChange={(e) => setNome(e.target.value)} style={{ flex: "1 1 200px" }} />
-        <select value={tipoMaterial} onChange={(e) => setTipoMaterial(e.target.value)} title="Tipo de material">
-          {MATERIAL_TIPO_OPTIONS.map((t) => <option key={t}>{t}</option>)}
-        </select>
-        <select value={classificacao} onChange={(e) => setClassificacao(e.target.value)} title="Classificação">
-          {MATERIAL_CLASSIFICACAO_OPTIONS.map((c) => <option key={c}>{c}</option>)}
-        </select>
+        <ConfigListSelect ctx={ctx} listId="material_tipo" value={tipoMaterial} onChange={setTipoMaterial} allowEmpty emptyLabel="Tipo…" style={{}} />
+        <ConfigListSelect ctx={ctx} listId="material_classificacao" value={classificacao} onChange={setClassificacao} style={{}} />
         <input type="text" placeholder="Link (https://…)" value={link} onChange={(e) => setLink(e.target.value)} style={{ flex: "1 1 200px" }} />
         <button type="submit" className="btn btn-primary btn-sm">Adicionar material</button>
       </form>
@@ -3205,7 +3686,7 @@ function MateriaisTab({ project, ctx }) {
       </div>
       <div className="diary-filter-chips">
         <span className={cx("chip", classif === "Todas" && "active")} onClick={() => setClassif("Todas")}>Todas as classificações</span>
-        {MATERIAL_CLASSIFICACAO_OPTIONS.map((c) => <span key={c} className={cx("chip", classif === c && "active")} onClick={() => setClassif(c)}>{c}</span>)}
+        {(ctx.listas.material_classificacao || []).filter((i) => i.ativo).map((i) => <span key={i.id} className={cx("chip", classif === i.id && "active")} onClick={() => setClassif(i.id)}>{i.nome}</span>)}
       </div>
 
       <div className="list-stack">
@@ -3568,6 +4049,7 @@ function NotesView({ ctx }) {
   const [filterTag, setFilterTag] = useState("Todas");
   const [filterPeriodo, setFilterPeriodo] = useState("Todos");
   const [sortKey, setSortKey] = useState("recentes");
+  const [showImport, setShowImport] = useState(false);
 
   const allTags = useMemo(() => Array.from(new Set(ctx.notes.flatMap((n) => n.tags || []))).sort(), [ctx.notes]);
 
@@ -3582,9 +4064,13 @@ function NotesView({ ctx }) {
     <div className="content-scroll narrow" style={{ padding: 0 }}>
       <div className="section-head">
         <h2>Anotações</h2>
-        <button className="btn btn-primary btn-sm" onClick={() => ctx.openNoteEditor("new")}><Icon name="plus" size={13} /> Nova anotação</button>
+        <div style={{ display: "flex", gap: 8 }}>
+          <button className="btn btn-ghost btn-sm" onClick={() => setShowImport(true)}><Icon name="upload" size={13} /> Importar Word</button>
+          <button className="btn btn-primary btn-sm" onClick={() => ctx.openNoteEditor("new")}><Icon name="plus" size={13} /> Nova anotação</button>
+        </div>
       </div>
       <p className="hint" style={{ margin: "-6px 0 16px" }}>Registre reuniões, levantamentos, ideias e análises — vincule a um projeto quando fizer sentido</p>
+      {showImport && <ImportarWordModal ctx={ctx} onClose={() => setShowImport(false)} />}
 
       <div className="filters-bar">
         <select value={filterProject} onChange={(e) => setFilterProject(e.target.value)}>
@@ -3594,7 +4080,7 @@ function NotesView({ ctx }) {
         </select>
         <select value={filterCategoria} onChange={(e) => setFilterCategoria(e.target.value)}>
           <option value="Todas">Categoria: todas</option>
-          {NOTE_CATEGORIA_OPTIONS.map((c) => <option key={c} value={c}>{c}</option>)}
+          {(ctx.listas.nota_categoria || []).filter((i) => i.ativo).map((i) => <option key={i.id} value={i.id}>{i.nome}</option>)}
         </select>
         {allTags.length > 0 && (
           <select value={filterTag} onChange={(e) => setFilterTag(e.target.value)}>
@@ -3624,6 +4110,7 @@ function NotesView({ ctx }) {
 function NotasTab({ project, ctx, setTab }) {
   const [filterCategoria, setFilterCategoria] = useState("Todas");
   const [filterTag, setFilterTag] = useState("Todas");
+  const [showImport, setShowImport] = useState(false);
 
   const notes0 = ctx.notes.filter((n) => n.projectId === project.id);
   const allTags = useMemo(() => Array.from(new Set(notes0.flatMap((n) => n.tags || []))).sort(), [notes0]);
@@ -3635,14 +4122,18 @@ function NotasTab({ project, ctx, setTab }) {
     <div>
       <div className="section-head">
         <h2>Anotações do projeto</h2>
-        <button className="btn btn-primary btn-sm" onClick={() => ctx.openNoteEditor("new", { projectId: project.id })}><Icon name="plus" size={13} /> Nova anotação</button>
+        <div style={{ display: "flex", gap: 8 }}>
+          <button className="btn btn-ghost btn-sm" onClick={() => setShowImport(true)}><Icon name="upload" size={13} /> Importar Word</button>
+          <button className="btn btn-primary btn-sm" onClick={() => ctx.openNoteEditor("new", { projectId: project.id })}><Icon name="plus" size={13} /> Nova anotação</button>
+        </div>
       </div>
       <span className="hint">Use a anotação como bloco de notas durante reuniões e levantamentos deste projeto</span>
+      {showImport && <ImportarWordModal ctx={ctx} projectId={project.id} onClose={() => setShowImport(false)} />}
 
       <div className="filters-bar" style={{ marginTop: 14 }}>
         <select value={filterCategoria} onChange={(e) => setFilterCategoria(e.target.value)}>
           <option value="Todas">Categoria: todas</option>
-          {NOTE_CATEGORIA_OPTIONS.map((c) => <option key={c} value={c}>{c}</option>)}
+          {(ctx.listas.nota_categoria || []).filter((i) => i.ativo).map((i) => <option key={i.id} value={i.id}>{i.nome}</option>)}
         </select>
         {allTags.length > 0 && (
           <select value={filterTag} onChange={(e) => setFilterTag(e.target.value)}>
@@ -3746,7 +4237,7 @@ function NoteEditorView({ route, ctx, navigate }) {
   const mountedRef = useRef(true);
 
   function fmtHora(d) { return String(d.getHours()).padStart(2, "0") + ":" + String(d.getMinutes()).padStart(2, "0"); }
-  function draftKey() { return "cf-note-draft-" + draftIdRef.current; }
+  function draftKey() { return "central-projetos-note-draft-" + draftIdRef.current; }
   function writeLocalDraft(snap, html, clear) {
     try {
       if (clear) { window.localStorage.removeItem(draftKey()); return; }
@@ -3803,21 +4294,29 @@ function NoteEditorView({ route, ctx, navigate }) {
     // eslint-disable-next-line
   }, [projectIdState]);
 
-  /* salva o que houver pendente ao desmontar (navegar para outra tela, fechar, etc.) — melhor esforço */
+  /* salva o que houver pendente ao desmontar (navegar para outra tela, fechar, etc.) — melhor esforço.
+     O rascunho local só é removido depois de uma confirmação real do Google Drive: se a aba fechar
+     antes dessa confirmação chegar (o que é possível, já que chamadas assíncronas podem não terminar
+     a tempo do navegador fechar), o rascunho permanece disponível para recuperação na próxima abertura. */
   function flushSaveOnUnmount() {
     if (saveTimerRef.current) { clearTimeout(saveTimerRef.current); saveTimerRef.current = null; }
     const snap = latestRef.current || {};
     const html = latestHtmlRef.current || "";
     const hasContent = (snap.titulo && snap.titulo.trim()) || htmlToPlainText(html).trim();
     if (!hasContent) return;
+    writeLocalDraft(snap, html, false);
     const payload = { titulo: snap.titulo, conteudoHtml: html, conteudo: htmlToPlainText(html), categoria: snap.categoria, tags: snap.tags || [], materiaisRelacionados: snap.materiais || [], projectId: snap.projectId || null, meetingId: snap.meetingId || null };
+    let persisted;
     if (!realIdRef.current) {
       const rec = ctx.addNote(payload);
       realIdRef.current = rec.id;
+      persisted = rec._persisted;
     } else {
-      ctx.updateNote(realIdRef.current, payload).catch(() => {});
+      persisted = ctx.updateNote(realIdRef.current, payload);
     }
-    writeLocalDraft(snap, html, true);
+    if (persisted && persisted.then) {
+      persisted.then(() => { writeLocalDraft(snap, html, true); }).catch(() => {});
+    }
   }
 
   function scheduleSave() {
@@ -3840,6 +4339,7 @@ function NoteEditorView({ route, ctx, navigate }) {
         // e fechar a barra lateral no meio da digitação
         const rec = ctx.addNote(payload);
         realIdRef.current = rec.id;
+        await rec._persisted; // só considera salvo depois da confirmação real (response.ok) do Google Drive
       } else {
         await ctx.updateNote(realIdRef.current, payload);
       }
@@ -4060,7 +4560,7 @@ function NoteEditorView({ route, ctx, navigate }) {
         </select>
         <select value={categoria} onChange={handleCategoriaChange}>
           <option value="">Categoria: nenhuma</option>
-          {NOTE_CATEGORIA_OPTIONS.map((c) => <option key={c} value={c}>{c}</option>)}
+          {(ctx.listas.nota_categoria || []).filter((i) => i.ativo).map((i) => <option key={i.id} value={i.id}>{i.nome}</option>)}
         </select>
         {projectIdState && (
           <select value={meetingIdState} onChange={handleMeetingChange}>
@@ -4231,7 +4731,8 @@ function BackupView({ ctx }) {
   }
 
   async function handleExportarELimpar() {
-    await ctx.downloadBackup();
+    const backupOk = await ctx.downloadBackup();
+    if (!backupOk) return; // backup falhou (ou foi cancelado) — nunca limpa dados sem um backup confirmado
     const ok = window.confirm(
       "O backup foi baixado. Confirma limpar TODOS os dados atuais (projetos, tarefas, notas, etc.) para começar do zero — por exemplo, ao trocar de empresa? Esta ação não pode ser desfeita."
     );
@@ -4298,6 +4799,407 @@ function BackupView({ ctx }) {
     </div>
   );
 }
+/* ==================================================================================
+   CONFIGURAÇÕES
+   ================================================================================== */
+const CONFIG_TABS = [
+  { key: "geral", label: "Geral" },
+  { key: "empresas", label: "Empresas" },
+  { key: "pessoas", label: "Pessoas" },
+  { key: "listas", label: "Listas e Categorias" },
+  { key: "contas-google", label: "Contas Google" },
+  { key: "identidade", label: "Identidade Visual" },
+];
+function ConfiguracoesView({ ctx, route, navigate }) {
+  const tab = route.tab || "geral";
+  function setTab(t) { navigate("settings", { tab: t }); }
+  return (
+    <div>
+      <div className="section-head"><h2>Configurações</h2><span className="hint">Cadastros e preferências administráveis — fora da navegação diária</span></div>
+      <div className="tabs-strip">
+        {CONFIG_TABS.map((t) => (
+          <button key={t.key} className={cx("tab-btn", tab === t.key && "active")} onClick={() => setTab(t.key)}>{t.label}</button>
+        ))}
+      </div>
+      {tab === "geral" && <ConfigGeralTab ctx={ctx} />}
+      {tab === "empresas" && <ConfigEmpresasTab ctx={ctx} />}
+      {tab === "pessoas" && <ConfigPessoasTab ctx={ctx} />}
+      {tab === "listas" && <ConfigListasTab ctx={ctx} />}
+      {tab === "contas-google" && <ConfigContasGoogleTab ctx={ctx} />}
+      {tab === "identidade" && <ConfigIdentidadeVisualTab ctx={ctx} />}
+    </div>
+  );
+}
+
+function ConfigGeralTab({ ctx }) {
+  return (
+    <div className="card" style={{ padding: 18 }}>
+      <div style={{ fontWeight: 700, fontSize: 13.5, marginBottom: 10 }}>Sobre esta área</div>
+      <p className="hint" style={{ margin: "0 0 14px" }}>
+        Aqui ficam os cadastros que sustentam o restante da aplicação: empresas, pessoas, listas configuráveis de
+        status/categorias, contas Google conectadas e a identidade visual exibida na barra lateral. Alterar um
+        cadastro não muda registros já lançados — apenas como eles são exibidos e quais opções aparecem nos formulários.
+      </p>
+      <div className="field-grid">
+        <div className="field"><span className="k">Empresas cadastradas</span><span className="v">{ctx.empresas.length}</span></div>
+        <div className="field"><span className="k">Pessoas cadastradas</span><span className="v">{ctx.pessoas.length}</span></div>
+        <div className="field"><span className="k">Listas configuráveis</span><span className="v">{Object.keys(DEFAULT_LISTS).length}</span></div>
+        <div className="field"><span className="k">Conta Google</span><span className="v">{ctx.authStatus === "logado" ? "Conectada" : "Desconectada"}</span></div>
+      </div>
+    </div>
+  );
+}
+
+function ConfigEmpresasTab({ ctx }) {
+  const [editingId, setEditingId] = useState(null); // id | "new" | null
+  const empty = { nome: "", nomeCurto: "", sigla: "", descricao: "", dominioEmail: "", observacoes: "", ativa: true };
+  const [form, setForm] = useState(empty);
+
+  function startNew() { setForm(empty); setEditingId("new"); }
+  function startEdit(e) { setForm({ nome: e.nome, nomeCurto: e.nomeCurto || "", sigla: e.sigla || "", descricao: e.descricao || "", dominioEmail: e.dominioEmail || "", observacoes: e.observacoes || "", ativa: e.ativa }); setEditingId(e.id); }
+  function cancel() { setEditingId(null); }
+  function save(e) {
+    e.preventDefault();
+    if (!form.nome.trim()) return;
+    if (editingId === "new") ctx.addEmpresa(form);
+    else ctx.updateEmpresa(editingId, form);
+    setEditingId(null);
+  }
+
+  return (
+    <div>
+      <div className="section-head"><h2>Empresas</h2>
+        <button className="btn btn-primary btn-sm" onClick={startNew}><Icon name="plus" size={13} /> Nova empresa</button>
+      </div>
+      <p className="hint" style={{ margin: "-6px 0 16px" }}>Cadastre aqui as empresas usadas nos projetos. "Pessoal / Sem empresa" já está sempre disponível e não precisa ser cadastrada.</p>
+
+      {editingId && (
+        <form className="card" style={{ padding: 16, marginBottom: 16 }} onSubmit={save}>
+          <div className="field-grid" style={{ marginTop: 0 }}>
+            <div className="field"><span className="k">Nome</span><input type="text" value={form.nome} onChange={(e) => setForm({ ...form, nome: e.target.value })} autoFocus style={fieldInputStyle} /></div>
+            <div className="field"><span className="k">Nome curto</span><input type="text" value={form.nomeCurto} onChange={(e) => setForm({ ...form, nomeCurto: e.target.value })} style={fieldInputStyle} /></div>
+            <div className="field"><span className="k">Sigla</span><input type="text" value={form.sigla} onChange={(e) => setForm({ ...form, sigla: e.target.value })} style={fieldInputStyle} /></div>
+            <div className="field"><span className="k">Domínio de e-mail</span><input type="text" placeholder="empresa.com" value={form.dominioEmail} onChange={(e) => setForm({ ...form, dominioEmail: e.target.value })} style={fieldInputStyle} /></div>
+          </div>
+          <div className="field-block" style={{ margin: "0 0 12px" }}>
+            <span className="k">Descrição</span>
+            <textarea value={form.descricao} onChange={(e) => setForm({ ...form, descricao: e.target.value })} rows={2} style={{ ...fieldInputStyle, resize: "vertical" }} />
+          </div>
+          <div className="field-block" style={{ margin: "0 0 12px" }}>
+            <span className="k">Observações</span>
+            <textarea value={form.observacoes} onChange={(e) => setForm({ ...form, observacoes: e.target.value })} rows={2} style={{ ...fieldInputStyle, resize: "vertical" }} />
+          </div>
+          <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12.5, marginBottom: 12 }}>
+            <input type="checkbox" checked={form.ativa} onChange={(e) => setForm({ ...form, ativa: e.target.checked })} /> Ativa
+          </label>
+          <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
+            <button type="button" className="btn btn-ghost btn-sm" onClick={cancel}>Cancelar</button>
+            <button type="submit" className="btn btn-primary btn-sm">{editingId === "new" ? "Criar empresa" : "Salvar alterações"}</button>
+          </div>
+        </form>
+      )}
+
+      <div className="list-stack">
+        {ctx.empresas.length === 0 && <EmptyState text='Nenhuma empresa cadastrada. Use "Nova empresa" para começar.' />}
+        {ctx.empresas.map((e) => (
+          <div className="item-row" key={e.id} onClick={() => startEdit(e)}>
+            <span className="feed-icon tone-neutral" style={{ marginTop: 1 }}><Icon name="users" size={14} /></span>
+            <div className="item-row-main">
+              <span className="item-row-title">{e.nome}{e.sigla ? ` (${e.sigla})` : ""}</span>
+              <span className="item-row-sub">{e.descricao || "—"}</span>
+            </div>
+            <div className="item-row-side">
+              <Pill tone={e.ativa ? "success" : "neutral"}>{e.ativa ? "Ativa" : "Inativa"}</Pill>
+              <button className="btn btn-ghost btn-sm" onClick={(ev) => { ev.stopPropagation(); ctx.setEmpresaAtiva(e.id, !e.ativa); }}>{e.ativa ? "Desativar" : "Ativar"}</button>
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function ConfigPessoasTab({ ctx }) {
+  const [editingId, setEditingId] = useState(null);
+  const empty = { nome: "", email: "", empresaId: "", area: "", cargo: "", ativo: true, podeResponsavel: true, podeSponsor: false, observacoes: "" };
+  const [form, setForm] = useState(empty);
+
+  function startNew() { setForm(empty); setEditingId("new"); }
+  function startEdit(p) { setForm({ nome: p.nome, email: p.email || "", empresaId: p.empresaId || "", area: p.area || "", cargo: p.cargo || "", ativo: p.ativo, podeResponsavel: p.podeResponsavel !== false, podeSponsor: !!p.podeSponsor, observacoes: p.observacoes || "" }); setEditingId(p.id); }
+  function cancel() { setEditingId(null); }
+  function save(e) {
+    e.preventDefault();
+    if (!form.nome.trim()) return;
+    const payload = { ...form, empresaId: form.empresaId || null };
+    if (editingId === "new") ctx.addPessoa(payload);
+    else ctx.updatePessoa(editingId, payload);
+    setEditingId(null);
+  }
+
+  return (
+    <div>
+      <div className="section-head"><h2>Pessoas</h2>
+        <button className="btn btn-primary btn-sm" onClick={startNew}><Icon name="plus" size={13} /> Nova pessoa</button>
+      </div>
+      <p className="hint" style={{ margin: "-6px 0 16px" }}>Base usada para Responsável e Sponsor em projetos, tarefas, decisões, pendências, riscos e marcos.</p>
+
+      {editingId && (
+        <form className="card" style={{ padding: 16, marginBottom: 16 }} onSubmit={save}>
+          <div className="field-grid" style={{ marginTop: 0 }}>
+            <div className="field"><span className="k">Nome</span><input type="text" value={form.nome} onChange={(e) => setForm({ ...form, nome: e.target.value })} autoFocus style={fieldInputStyle} /></div>
+            <div className="field"><span className="k">E-mail</span><input type="email" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} style={fieldInputStyle} /></div>
+            <div className="field"><span className="k">Empresa</span>
+              <select value={form.empresaId} onChange={(e) => setForm({ ...form, empresaId: e.target.value })} style={fieldInputStyle}>
+                <option value="">Pessoal / Sem empresa</option>
+                {ctx.empresas.filter((e) => e.ativa || e.id === form.empresaId).map((e) => <option key={e.id} value={e.id}>{e.nome}</option>)}
+              </select>
+            </div>
+            <div className="field"><span className="k">Área</span><input type="text" value={form.area} onChange={(e) => setForm({ ...form, area: e.target.value })} style={fieldInputStyle} /></div>
+            <div className="field"><span className="k">Cargo/função</span><input type="text" value={form.cargo} onChange={(e) => setForm({ ...form, cargo: e.target.value })} style={fieldInputStyle} /></div>
+          </div>
+          <div className="field-block" style={{ margin: "0 0 12px" }}>
+            <span className="k">Observações</span>
+            <textarea value={form.observacoes} onChange={(e) => setForm({ ...form, observacoes: e.target.value })} rows={2} style={{ ...fieldInputStyle, resize: "vertical" }} />
+          </div>
+          <div style={{ display: "flex", gap: 16, flexWrap: "wrap", marginBottom: 12 }}>
+            <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12.5 }}>
+              <input type="checkbox" checked={form.ativo} onChange={(e) => setForm({ ...form, ativo: e.target.checked })} /> Ativo
+            </label>
+            <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12.5 }}>
+              <input type="checkbox" checked={form.podeResponsavel} onChange={(e) => setForm({ ...form, podeResponsavel: e.target.checked })} /> Pode ser responsável
+            </label>
+            <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12.5 }}>
+              <input type="checkbox" checked={form.podeSponsor} onChange={(e) => setForm({ ...form, podeSponsor: e.target.checked })} /> Pode ser sponsor
+            </label>
+          </div>
+          <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
+            <button type="button" className="btn btn-ghost btn-sm" onClick={cancel}>Cancelar</button>
+            <button type="submit" className="btn btn-primary btn-sm">{editingId === "new" ? "Criar pessoa" : "Salvar alterações"}</button>
+          </div>
+        </form>
+      )}
+
+      <div className="list-stack">
+        {ctx.pessoas.length === 0 && <EmptyState text="Nenhuma pessoa cadastrada." />}
+        {ctx.pessoas.map((p) => (
+          <div className="item-row" key={p.id} onClick={() => startEdit(p)}>
+            <Avatar person={{ nome: p.nome, iniciais: p.iniciais }} />
+            <div className="item-row-main">
+              <span className="item-row-title">{p.nome}</span>
+              <span className="item-row-sub">{[p.cargo, empresaLabel(p.empresaId)].filter(Boolean).join(" — ")}</span>
+            </div>
+            <div className="item-row-side">
+              {p.podeResponsavel && <Pill tone="info">Responsável</Pill>}
+              {p.podeSponsor && <Pill tone="accent">Sponsor</Pill>}
+              <Pill tone={p.ativo ? "success" : "neutral"}>{p.ativo ? "Ativo" : "Inativo"}</Pill>
+              <button className="btn btn-ghost btn-sm" onClick={(ev) => { ev.stopPropagation(); ctx.setPessoaAtiva(p.id, !p.ativo); }}>{p.ativo ? "Desativar" : "Ativar"}</button>
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function ConfigListasTab({ ctx }) {
+  const listIds = Object.keys(DEFAULT_LISTS);
+  const [selected, setSelected] = useState(listIds[0]);
+  const [novo, setNovo] = useState("");
+  const [editingItemId, setEditingItemId] = useState(null);
+  const [editNome, setEditNome] = useState("");
+
+  const itens = (ctx.listas[selected] || []).slice().sort((a, b) => a.ordem - b.ordem);
+
+  function handleAdd(e) {
+    e.preventDefault();
+    if (!novo.trim()) return;
+    ctx.addListItem(selected, novo);
+    setNovo("");
+  }
+  function startEditNome(item) { setEditingItemId(item.id); setEditNome(item.nome); }
+  function saveEditNome(item) {
+    if (editNome.trim() && editNome.trim() !== item.nome) ctx.updateListItem(selected, item.id, { nome: editNome.trim() });
+    setEditingItemId(null);
+  }
+  function handleDelete(item) {
+    const r = ctx.deleteListItem(selected, item.id);
+    if (!r.ok) ctx.setToast(r.motivo);
+  }
+
+  return (
+    <div>
+      <div className="section-head"><h2>Listas e categorias</h2></div>
+      <p className="hint" style={{ margin: "-6px 0 16px" }}>
+        Renomear um item não afeta registros já lançados com ele — só muda o texto exibido. Itens já usados em
+        registros, ou essenciais para o funcionamento do app, não podem ser excluídos — apenas desativados.
+      </p>
+      <div className="filters-bar">
+        <select value={selected} onChange={(e) => setSelected(e.target.value)}>
+          {listIds.map((id) => <option key={id} value={id}>{DEFAULT_LISTS[id].label}</option>)}
+        </select>
+      </div>
+
+      <form className="quick-add" onSubmit={handleAdd} style={{ marginBottom: 12 }}>
+        <input type="text" placeholder="Novo item…" value={novo} onChange={(e) => setNovo(e.target.value)} />
+        <button type="submit" className="btn btn-primary btn-sm">Adicionar</button>
+      </form>
+
+      <div className="list-stack">
+        {itens.length === 0 && <EmptyState text="Nenhum item nesta lista ainda." />}
+        {itens.map((item, idx) => (
+          <div className="item-row" key={item.id} style={{ cursor: "default" }}>
+            <span className="feed-icon tone-neutral" style={{ marginTop: 1 }}><Icon name="layers" size={14} /></span>
+            <div className="item-row-main">
+              {editingItemId === item.id
+                ? <input type="text" autoFocus value={editNome} onChange={(e) => setEditNome(e.target.value)}
+                    onBlur={() => saveEditNome(item)} onKeyDown={(e) => { if (e.key === "Enter") saveEditNome(item); if (e.key === "Escape") setEditingItemId(null); }}
+                    style={{ ...fieldInputStyle, maxWidth: 280 }} />
+                : <span className="item-row-title" onClick={() => startEditNome(item)} style={{ cursor: "text" }} title="Clique para renomear">{item.nome}</span>}
+              <span className="item-row-sub">id interno: {item.id}{item.systemRole ? ` · usado internamente (${item.systemRole})` : ""}</span>
+            </div>
+            <div className="item-row-side">
+              <button className="icon-btn" title="Mover para cima" onClick={() => ctx.moveListItem(selected, item.id, -1)} disabled={idx === 0}>▲</button>
+              <button className="icon-btn" title="Mover para baixo" onClick={() => ctx.moveListItem(selected, item.id, 1)} disabled={idx === itens.length - 1}>▼</button>
+              <Pill tone={item.ativo ? "success" : "neutral"}>{item.ativo ? "Ativo" : "Inativo"}</Pill>
+              <button className="btn btn-ghost btn-sm" onClick={() => ctx.toggleListItemAtivo(selected, item.id)}>{item.ativo ? "Desativar" : "Ativar"}</button>
+              {!item.systemRole && (
+                <button className="icon-btn" title="Excluir" onClick={() => handleDelete(item)}><Icon name="trash" size={13} /></button>
+              )}
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function ConfigContasGoogleTab({ ctx }) {
+  const statusLabel = {
+    "nao-configurado": "Google Client ID não configurado nesta cópia do arquivo.",
+    "verificando": "Verificando sessão do Google…",
+    "deslogado": "Nenhuma conta conectada.",
+    "entrando": "Conectando…",
+    "logado": "Conta conectada — usada para o Google Drive (armazenamento dos dados da Central).",
+    "erro": "Erro ao carregar o login do Google.",
+  }[ctx.authStatus] || ctx.authStatus;
+  return (
+    <div>
+      <div className="section-head"><h2>Contas Google</h2></div>
+      <div className="card" style={{ padding: 18 }}>
+        <div style={{ fontWeight: 700, fontSize: 13.5, marginBottom: 8 }}>Conta conectada</div>
+        <div className="field-grid" style={{ marginTop: 0, marginBottom: 12 }}>
+          <div className="field"><span className="k">Status</span><span className="v">{statusLabel}</span></div>
+          <div className="field"><span className="k">Uso</span><span className="v">Google Drive (armazenamento do arquivo de dados da Central)</span></div>
+        </div>
+        {ctx.authStatus === "logado" && <button className="btn btn-ghost btn-sm" onClick={ctx.signOutGoogle}>Desconectar</button>}
+        {(ctx.authStatus === "deslogado" || ctx.authStatus === "erro") && <button className="btn btn-primary btn-sm" onClick={ctx.signInWithGoogle}>Conectar</button>}
+      </div>
+      <div className="card" style={{ padding: 18, marginTop: 16 }}>
+        <div style={{ fontWeight: 700, fontSize: 13.5, marginBottom: 8 }}>Múltiplas contas Google</div>
+        <p className="hint" style={{ margin: 0 }}>
+          Nesta fase, a Central conecta a uma única conta Google, usada para o Google Drive. Conectar várias contas —
+          para escolher, por arquivo, em qual conta e pasta salvar, e para Google Agenda, Google Meet, atas e
+          transcrições — é uma evolução planejada para uma próxima rodada e depende de configuração adicional no
+          Google Cloud (ver GUIA-CONFIGURACAO.md). Nada relacionado a múltiplas contas está simulado nesta versão.
+        </p>
+      </div>
+    </div>
+  );
+}
+
+function ConfigIdentidadeVisualTab({ ctx }) {
+  const [nomeApp, setNomeApp] = useState(ctx.identidadeVisual.nomeApp || "");
+  const [subtitulo, setSubtitulo] = useState(ctx.identidadeVisual.subtitulo || "");
+  const [error, setError] = useState("");
+  const fileRef = useRef(null);
+
+  function saveTexto(e) {
+    e.preventDefault();
+    ctx.updateIdentidadeVisual({ nomeApp: nomeApp.trim() || "Central de Projetos", subtitulo: subtitulo.trim() });
+    ctx.setToast("Identidade visual atualizada.");
+  }
+
+  function handleLogoFile(e) {
+    setError("");
+    const file = e.target.files && e.target.files[0];
+    if (!file) return;
+    if (["image/png", "image/jpeg", "image/webp"].indexOf(file.type) === -1) {
+      setError("Formato não suportado — envie PNG, JPG ou WebP.");
+      return;
+    }
+    if (file.size > 3 * 1024 * 1024) {
+      setError("Arquivo muito grande — o limite é 3 MB.");
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = () => {
+      const img = new Image();
+      img.onload = () => {
+        const maxSize = 240;
+        let width = img.width, height = img.height;
+        if (width > maxSize || height > maxSize) {
+          const scale = maxSize / Math.max(width, height);
+          width = Math.round(width * scale);
+          height = Math.round(height * scale);
+        }
+        const canvas = document.createElement("canvas");
+        canvas.width = width; canvas.height = height;
+        const c = canvas.getContext("2d");
+        c.drawImage(img, 0, 0, width, height);
+        const dataUrl = canvas.toDataURL(file.type === "image/png" ? "image/png" : "image/jpeg", 0.85);
+        ctx.updateIdentidadeVisual({ logoDataUrl: dataUrl });
+        ctx.setToast("Logo atualizado.");
+      };
+      img.onerror = () => setError("Não foi possível processar essa imagem.");
+      img.src = String(reader.result);
+    };
+    reader.onerror = () => setError("Não foi possível ler o arquivo.");
+    reader.readAsDataURL(file);
+    if (fileRef.current) fileRef.current.value = "";
+  }
+
+  function removeLogo() { ctx.updateIdentidadeVisual({ logoDataUrl: null }); }
+  function restaurarPadrao() {
+    setNomeApp(IDENTIDADE_VISUAL_PADRAO.nomeApp);
+    setSubtitulo(IDENTIDADE_VISUAL_PADRAO.subtitulo);
+    ctx.updateIdentidadeVisual({ nomeApp: IDENTIDADE_VISUAL_PADRAO.nomeApp, subtitulo: IDENTIDADE_VISUAL_PADRAO.subtitulo, logoDataUrl: null });
+  }
+
+  return (
+    <div>
+      <div className="section-head"><h2>Identidade visual</h2></div>
+      <form className="card" style={{ padding: 18, marginBottom: 16 }} onSubmit={saveTexto}>
+        <div className="field-grid" style={{ marginTop: 0, marginBottom: 12 }}>
+          <div className="field"><span className="k">Nome da aplicação</span><input type="text" value={nomeApp} onChange={(e) => setNomeApp(e.target.value)} style={fieldInputStyle} /></div>
+          <div className="field"><span className="k">Subtítulo</span><input type="text" value={subtitulo} onChange={(e) => setSubtitulo(e.target.value)} style={fieldInputStyle} /></div>
+        </div>
+        <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
+          <button type="button" className="btn btn-ghost btn-sm" onClick={restaurarPadrao}>Restaurar padrão</button>
+          <button type="submit" className="btn btn-primary btn-sm">Salvar</button>
+        </div>
+      </form>
+
+      <div className="card" style={{ padding: 18 }}>
+        <div style={{ fontWeight: 700, fontSize: 13.5, marginBottom: 8 }}>Logo</div>
+        <div style={{ display: "flex", alignItems: "center", gap: 16, marginBottom: 12, flexWrap: "wrap" }}>
+          <div style={{ width: 56, height: 56, borderRadius: 10, border: "1px solid var(--border)", display: "flex", alignItems: "center", justifyContent: "center", overflow: "hidden", background: "var(--surface-sunken)" }}>
+            {ctx.identidadeVisual.logoDataUrl
+              ? <img src={ctx.identidadeVisual.logoDataUrl} alt="Logo" style={{ maxWidth: "100%", maxHeight: "100%", objectFit: "contain" }} />
+              : <span style={{ fontSize: 10.5, color: "var(--text-muted)" }}>sem logo</span>}
+          </div>
+          <div style={{ display: "flex", gap: 8 }}>
+            <button type="button" className="btn btn-ghost btn-sm" onClick={() => fileRef.current && fileRef.current.click()}><Icon name="upload" size={13} /> {ctx.identidadeVisual.logoDataUrl ? "Substituir" : "Enviar logo"}</button>
+            {ctx.identidadeVisual.logoDataUrl && <button type="button" className="btn btn-ghost btn-sm" onClick={removeLogo}>Remover</button>}
+          </div>
+          <input ref={fileRef} type="file" accept="image/png,image/jpeg,image/webp" style={{ display: "none" }} onChange={handleLogoFile} />
+        </div>
+        <p className="hint" style={{ margin: 0 }}>PNG, JPG ou WebP, até 3 MB. A imagem é redimensionada automaticamente para exibição na barra lateral.</p>
+        {error && <div className="stale-alert" style={{ marginTop: 10 }}><Icon name="alert" size={12} /> {error}</div>}
+      </div>
+    </div>
+  );
+}
+
 /* ==========================================================================
    CENTRAL DE PROJETOS — drawers, modais, busca e ponto de entrada
    ========================================================================== */
@@ -4404,7 +5306,7 @@ function TaskDetail({ rec: t, ctx, onClose }) {
       <div className="field-grid">
         <div className="field"><span className="k">Status</span>
           <select className="v" value={t.status} onChange={(e) => ctx.setTaskStatus(t.id, e.target.value)} style={{ padding: "5px 8px", borderRadius: 6, border: "1px solid var(--border)", background: "var(--surface)", fontFamily: "inherit" }}>
-            {["A fazer", "Em andamento", "Aguardando", "Concluído"].map((s) => <option key={s}>{s}</option>)}
+            {(ctx.listas.tarefa_status || []).filter((i) => i.ativo || i.id === t.status).map((i) => <option key={i.id} value={i.id}>{i.nome}</option>)}
           </select>
         </div>
         <div className="field"><span className="k">Prioridade</span><span className={cx("v", "priority-tag", priorityClass(t.prioridade))}>{t.prioridade}</span></div>
@@ -4445,6 +5347,10 @@ function DecisionDetail({ rec: d, ctx, onClose }) {
           <div className="subrecord-chip-list">{d.documentosRelacionadosIds.map((did) => <span key={did} className="subrecord-chip" onClick={() => ctx.goToRecord("documento", did)}><Icon name="doc" size={12} /> {ctx.documents.find((x) => x.id === did)?.nome}</span>)}</div>
         </div>
       )}
+      {d.observacoes && <div className="field-block"><span className="k">Observações</span><span className="v">{d.observacoes}</span></div>}
+      <div style={{ display: "flex", gap: 8, marginTop: 14 }}>
+        <button className="btn btn-ghost btn-sm" onClick={() => ctx.openDecisionForm(d.projectId, d)}><Icon name="edit" size={13} /> Editar decisão</button>
+      </div>
     </>
   );
 }
@@ -4464,6 +5370,9 @@ function PendencyDetail({ rec: p, ctx, onClose }) {
       </div>
       {p.observacoes && <div className="field-block"><span className="k">Observações</span><span className="v">{p.observacoes}</span></div>}
       <OriginLine origem={p.origem} ctx={ctx} onClose={onClose} />
+      <div style={{ display: "flex", gap: 8, marginTop: 14 }}>
+        <button className="btn btn-ghost btn-sm" onClick={() => ctx.openPendencyForm(p.projectId, p)}><Icon name="edit" size={13} /> Editar pendência</button>
+      </div>
     </>
   );
 }
@@ -4480,7 +5389,13 @@ function RiskDetail({ rec: r, ctx, onClose }) {
         <div className="field"><span className="k">Prazo do plano</span><span className="v mono">{r.prazo ? fmtDate(r.prazo) : "—"}</span></div>
       </div>
       <div className="field-block"><span className="k">Plano de ação</span><span className="v">{r.planoAcao}</span></div>
+      {r.causa && <div className="field-block"><span className="k">Causa</span><span className="v">{r.causa}</span></div>}
+      {r.consequencia && <div className="field-block"><span className="k">Consequência</span><span className="v">{r.consequencia}</span></div>}
+      {r.observacoes && <div className="field-block"><span className="k">Observações</span><span className="v">{r.observacoes}</span></div>}
       <OriginLine origem={r.origem} ctx={ctx} onClose={onClose} />
+      <div style={{ display: "flex", gap: 8, marginTop: 14 }}>
+        <button className="btn btn-ghost btn-sm" onClick={() => ctx.openRiskForm(r.projectId, r)}><Icon name="edit" size={13} /> Editar registro</button>
+      </div>
     </>
   );
 }
@@ -4792,6 +5707,8 @@ const NEW_ITEM_TYPES = [
   { key: "reuniao", label: "Reunião", icon: "users", geral: false },
   { key: "pendencia", label: "Pendência", icon: "clock", geral: false },
   { key: "decisao", label: "Decisão", icon: "flag", geral: false },
+  { key: "risco", label: "Risco / Problema / Impedimento", icon: "alert", geral: false },
+  { key: "material", label: "Material", icon: "doc", geral: false },
 ];
 
 function NewItemButton({ ctx }) {
@@ -4803,6 +5720,10 @@ function NewItemButton({ ctx }) {
   function selectTipo(k) {
     // Anotação nunca usa o formulário pequeno — vai direto para o editor completo em tela cheia
     if (k === "nota") { close(); ctx.openNoteEditor("new", contextProjectId ? { projectId: contextProjectId } : {}); return; }
+    // Decisão, Pendência e Risco têm formulários completos próprios — não usam o formulário pequeno
+    if (k === "decisao") { close(); ctx.openDecisionForm(contextProjectId || null, null); return; }
+    if (k === "pendencia") { close(); ctx.openPendencyForm(contextProjectId || null, null); return; }
+    if (k === "risco") { close(); ctx.openRiskForm(contextProjectId || null, null); return; }
     setTipo(k);
   }
 
@@ -4839,32 +5760,35 @@ function NewItemButton({ ctx }) {
 }
 
 function NewItemForm({ tipo, ctx, contextProjectId, onBack, onDone }) {
+  // Nota, Decisão, Pendência e Risco são interceptados em selectTipo() e nunca chegam aqui —
+  // este formulário pequeno hoje só atende Tarefa, Lembrete, Reunião e Material.
   const typeInfo = NEW_ITEM_TYPES.find((t) => t.key === tipo);
   const [projectId, setProjectId] = useState(contextProjectId || "");
   const [titulo, setTitulo] = useState("");
   const [conteudo, setConteudo] = useState("");
   const [prazo, setPrazo] = useState("");
+  const [tipoMaterial, setTipoMaterial] = useState("");
+  const [classificacaoMaterial, setClassificacaoMaterial] = useState("");
+  const [linkMaterial, setLinkMaterial] = useState("");
   const [error, setError] = useState("");
 
   function handleSubmit(e) {
     e.preventDefault();
     setError("");
-    if (!titulo.trim()) { setError("Preencha o título."); return; }
+    if (!titulo.trim()) { setError(tipo === "material" ? "Preencha o nome do material." : "Preencha o título."); return; }
     if (!typeInfo.geral && !projectId) { setError("Selecione um projeto — este tipo de registro exige um projeto."); return; }
     const pid = projectId || null;
     if (tipo === "tarefa") ctx.addTask({ titulo, projectId: pid, prazo: prazo || null });
-    if (tipo === "nota") ctx.addNote({ titulo, conteudo, projectId: pid });
     if (tipo === "lembrete") ctx.addReminder({ texto: titulo, projectId: pid });
     if (tipo === "reuniao") ctx.addMeetingManual({ titulo, projectId: pid, objetivo: conteudo });
-    if (tipo === "pendencia") ctx.addPendencyManual({ pendencia: titulo, projectId: pid, prazo: prazo || null });
-    if (tipo === "decisao") ctx.addDecisionManual({ decisao: titulo, projectId: pid, contexto: conteudo });
+    if (tipo === "material") ctx.addDocument({ projectId: pid, nome: titulo, categoria: tipoMaterial || undefined, classificacao: classificacaoMaterial || undefined, link: linkMaterial });
     onDone();
   }
 
   return (
     <form onSubmit={handleSubmit}>
       <div className="field-block" style={{ margin: "0 0 12px" }}>
-        <span className="k">{tipo === "reuniao" ? "Título da reunião" : tipo === "decisao" ? "Decisão" : tipo === "pendencia" ? "Pendência" : tipo === "lembrete" ? "Texto do lembrete" : "Título"}</span>
+        <span className="k">{tipo === "reuniao" ? "Título da reunião" : tipo === "lembrete" ? "Texto do lembrete" : tipo === "material" ? "Nome do material" : "Título"}</span>
         <input type="text" value={titulo} onChange={(e) => setTitulo(e.target.value)} autoFocus
           style={{ width: "100%", padding: "7px 9px", borderRadius: 6, border: "1px solid var(--border)", background: "var(--surface)", fontFamily: "inherit", fontSize: 13 }} />
       </div>
@@ -4877,19 +5801,32 @@ function NewItemForm({ tipo, ctx, contextProjectId, onBack, onDone }) {
           {ctx.projects.filter((p) => !p.arquivado).map((p) => <option key={p.id} value={p.id}>{p.nome}</option>)}
         </select>
       </div>
-      {(tipo === "tarefa" || tipo === "pendencia") && (
+      {tipo === "tarefa" && (
         <div className="field-block" style={{ margin: "0 0 12px" }}>
           <span className="k">Prazo</span>
           <input type="date" value={prazo} onChange={(e) => setPrazo(e.target.value)}
             style={{ padding: "6px 9px", borderRadius: 6, border: "1px solid var(--border)", background: "var(--surface)", fontFamily: "inherit", fontSize: 13 }} />
         </div>
       )}
-      {(tipo === "nota" || tipo === "reuniao" || tipo === "decisao") && (
+      {tipo === "reuniao" && (
         <div className="field-block" style={{ margin: "0 0 12px" }}>
-          <span className="k">{tipo === "nota" ? "Conteúdo" : tipo === "reuniao" ? "Objetivo" : "Contexto"}</span>
+          <span className="k">Objetivo</span>
           <textarea value={conteudo} onChange={(e) => setConteudo(e.target.value)} rows={3}
             style={{ width: "100%", padding: "7px 9px", borderRadius: 6, border: "1px solid var(--border)", background: "var(--surface)", fontFamily: "inherit", fontSize: 13, resize: "vertical" }} />
         </div>
+      )}
+      {tipo === "material" && (
+        <>
+          <div className="field-grid" style={{ margin: "0 0 12px" }}>
+            <div className="field"><span className="k">Tipo</span><ConfigListSelect ctx={ctx} listId="material_tipo" value={tipoMaterial} onChange={setTipoMaterial} allowEmpty emptyLabel="Selecione…" /></div>
+            <div className="field"><span className="k">Classificação</span><ConfigListSelect ctx={ctx} listId="material_classificacao" value={classificacaoMaterial} onChange={setClassificacaoMaterial} allowEmpty emptyLabel="Selecione…" /></div>
+          </div>
+          <div className="field-block" style={{ margin: "0 0 12px" }}>
+            <span className="k">Link (https://…)</span>
+            <input type="text" value={linkMaterial} onChange={(e) => setLinkMaterial(e.target.value)}
+              style={{ width: "100%", padding: "7px 9px", borderRadius: 6, border: "1px solid var(--border)", background: "var(--surface)", fontFamily: "inherit", fontSize: 13 }} />
+          </div>
+        </>
       )}
       {error && <div className="stale-alert" style={{ marginBottom: 12 }}><Icon name="alert" size={12} /> {error}</div>}
       <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
@@ -4910,6 +5847,7 @@ function ProjectFormModal({ data, ctx, onClose }) {
   const [descricao, setDescricao] = useState(p ? p.descricao : "");
   const [objetivo, setObjetivo] = useState(p ? p.objetivo : "");
   const [area, setArea] = useState(p ? p.area : "");
+  const [empresaId, setEmpresaId] = useState(p ? (p.empresaId || "") : "");
   const [responsavel, setResponsavel] = useState(p ? p.responsavel : "clara");
   const [sponsor, setSponsor] = useState(p ? (p.sponsor || "") : "");
   const [prioridade, setPrioridade] = useState(p ? p.prioridade : "Média");
@@ -4931,7 +5869,7 @@ function ProjectFormModal({ data, ctx, onClose }) {
   function handleSubmit(e) {
     e.preventDefault();
     if (!nome.trim()) { setError("Preencha o nome do projeto."); return; }
-    const payload = { nome, descricao, objetivo, area, responsavel, sponsor: sponsor || null, prioridade, status, saude,
+    const payload = { nome, descricao, objetivo, area, empresaId: empresaId || null, responsavel, sponsor: sponsor || null, prioridade, status, saude,
       dataInicio, prazoPrevisto, percentual: Number(percentual) || 0, proximaAcao, dependeDeIds, observacoes };
     if (data.mode === "create") ctx.addProject(payload);
     else ctx.updateProject(p.id, payload);
@@ -4960,33 +5898,18 @@ function ProjectFormModal({ data, ctx, onClose }) {
               <textarea value={descricao} onChange={(e) => setDescricao(e.target.value)} rows={2} style={{ ...fieldInputStyle, resize: "vertical" }} />
             </div>
             <div className="field-grid">
-              <div className="field"><span className="k">Área</span><input type="text" value={area} onChange={(e) => setArea(e.target.value)} style={fieldInputStyle} /></div>
-              <div className="field"><span className="k">Prioridade</span>
-                <select value={prioridade} onChange={(e) => setPrioridade(e.target.value)} style={fieldInputStyle}>
-                  {["Alta", "Média", "Baixa"].map((s) => <option key={s}>{s}</option>)}
+              <div className="field"><span className="k">Empresa</span>
+                <select value={empresaId} onChange={(e) => setEmpresaId(e.target.value)} style={fieldInputStyle}>
+                  <option value="">Pessoal / Sem empresa</option>
+                  {ctx.empresas.filter((e) => e.ativa || e.id === empresaId).map((e) => <option key={e.id} value={e.id}>{e.nome}</option>)}
                 </select>
               </div>
-              <div className="field"><span className="k">Responsável</span>
-                <select value={responsavel} onChange={(e) => setResponsavel(e.target.value)} style={fieldInputStyle}>
-                  {Object.keys(PEOPLE).map((k) => <option key={k} value={k}>{personLabel(k)}</option>)}
-                </select>
-              </div>
-              <div className="field"><span className="k">Sponsor</span>
-                <select value={sponsor} onChange={(e) => setSponsor(e.target.value)} style={fieldInputStyle}>
-                  <option value="">—</option>
-                  {Object.keys(PEOPLE).map((k) => <option key={k} value={k}>{personLabel(k)}</option>)}
-                </select>
-              </div>
-              <div className="field"><span className="k">Status</span>
-                <select value={status} onChange={(e) => setStatus(e.target.value)} style={fieldInputStyle}>
-                  {PROJECT_STATUS_OPTIONS.map((s) => <option key={s}>{s}</option>)}
-                </select>
-              </div>
-              <div className="field"><span className="k">Saúde</span>
-                <select value={saude} onChange={(e) => setSaude(e.target.value)} style={fieldInputStyle}>
-                  {PROJECT_SAUDE_OPTIONS.map((s) => <option key={s}>{s}</option>)}
-                </select>
-              </div>
+              <div className="field"><span className="k">Área</span><ConfigListSelect ctx={ctx} listId="projeto_area" value={area} onChange={setArea} allowEmpty emptyLabel="—" /></div>
+              <div className="field"><span className="k">Prioridade</span><ConfigListSelect ctx={ctx} listId="projeto_prioridade" value={prioridade} onChange={setPrioridade} /></div>
+              <div className="field"><span className="k">Responsável</span><PersonSelect ctx={ctx} value={responsavel} onChange={setResponsavel} role="responsavel" /></div>
+              <div className="field"><span className="k">Sponsor</span><PersonSelect ctx={ctx} value={sponsor} onChange={setSponsor} role="sponsor" allowEmpty emptyLabel="—" /></div>
+              <div className="field"><span className="k">Status</span><ConfigListSelect ctx={ctx} listId="projeto_status" value={status} onChange={setStatus} /></div>
+              <div className="field"><span className="k">Saúde</span><ConfigListSelect ctx={ctx} listId="projeto_saude" value={saude} onChange={setSaude} /></div>
               <div className="field"><span className="k">Data de início</span><input type="date" value={dataInicio} onChange={(e) => setDataInicio(e.target.value)} style={fieldInputStyle} /></div>
               <div className="field"><span className="k">Prazo previsto</span><input type="date" value={prazoPrevisto} onChange={(e) => setPrazoPrevisto(e.target.value)} style={fieldInputStyle} /></div>
               <div className="field"><span className="k">Percentual de evolução</span><input type="number" min="0" max="100" value={percentual} onChange={(e) => setPercentual(e.target.value)} style={fieldInputStyle} /></div>
@@ -5075,16 +5998,8 @@ function MilestoneFormModal({ data, ctx, onClose }) {
               <textarea value={descricao} onChange={(e) => setDescricao(e.target.value)} rows={2} style={{ ...fieldInputStyle, resize: "vertical" }} />
             </div>
             <div className="field-grid">
-              <div className="field"><span className="k">Responsável</span>
-                <select value={responsavel} onChange={(e) => setResponsavel(e.target.value)} style={fieldInputStyle}>
-                  {Object.keys(PEOPLE).map((k) => <option key={k} value={k}>{personLabel(k)}</option>)}
-                </select>
-              </div>
-              <div className="field"><span className="k">Status</span>
-                <select value={status} onChange={(e) => setStatus(e.target.value)} style={fieldInputStyle}>
-                  {MILESTONE_STATUS_OPTIONS.map((s) => <option key={s}>{s}</option>)}
-                </select>
-              </div>
+              <div className="field"><span className="k">Responsável</span><PersonSelect ctx={ctx} value={responsavel} onChange={setResponsavel} role="responsavel" /></div>
+              <div className="field"><span className="k">Status</span><ConfigListSelect ctx={ctx} listId="marco_status" value={status} onChange={setStatus} /></div>
               <div className="field"><span className="k">Data prevista</span><input type="date" value={previsao} onChange={(e) => setPrevisao(e.target.value)} style={fieldInputStyle} /></div>
               <div className="field"><span className="k">Data realizada</span><input type="date" value={dataRealizada} onChange={(e) => setDataRealizada(e.target.value)} style={fieldInputStyle} /></div>
             </div>
@@ -5103,6 +6018,408 @@ function MilestoneFormModal({ data, ctx, onClose }) {
             <button type="submit" className="btn btn-primary btn-sm">{data.mode === "create" ? "Criar marco" : "Salvar alterações"}</button>
           </div>
         </form>
+      </div>
+    </div>
+  );
+}
+
+/* ==================================================================================
+   DECISÕES, PENDÊNCIAS E RISCOS — criação/edição manual com todos os campos
+   ================================================================================== */
+function DecisionFormModal({ data, ctx, onClose }) {
+  const d = data.decision;
+  const [projectId, setProjectId] = useState(data.projectId || (d && d.projectId) || "");
+  const [decisao, setDecisao] = useState(d ? d.decisao : "");
+  const [dataDecisao, setDataDecisao] = useState(d ? d.data : TODAY);
+  const [contexto, setContexto] = useState(d ? (d.contexto || "") : "");
+  const [motivo, setMotivo] = useState(d ? (d.motivo || "") : "");
+  const [alternativas, setAlternativas] = useState(d ? (d.alternativas || "") : "");
+  const [responsavel, setResponsavel] = useState(d ? d.responsavel : "clara");
+  const [impacto, setImpacto] = useState(d ? (d.impacto || "") : "A avaliar");
+  const [status, setStatus] = useState(d ? d.status : "Em análise");
+  const [reuniaoOrigemId, setReuniaoOrigemId] = useState(d ? (d.reuniaoOrigemId || "") : "");
+  const [observacoes, setObservacoes] = useState(d ? (d.observacoes || "") : "");
+  const [error, setError] = useState("");
+  const reunioesDoProjeto = ctx.meetings.filter((m) => m.projectId === projectId);
+
+  function handleSubmit(e) {
+    e.preventDefault();
+    if (!decisao.trim()) { setError("Preencha a decisão."); return; }
+    if (!projectId) { setError("Selecione um projeto."); return; }
+    const payload = { decisao, data: dataDecisao, contexto, motivo, alternativas, responsavel, impacto, status, reuniaoOrigemId: reuniaoOrigemId || null, observacoes };
+    if (data.mode === "create") ctx.addDecisionManual({ ...payload, projectId });
+    else ctx.updateDecisionRecord(d.id, { ...payload, projectId });
+    onClose();
+  }
+
+  return (
+    <div className="overlay modal-center" onClick={onClose}>
+      <div className="modal-box" onClick={(e) => e.stopPropagation()} style={{ width: "min(560px, 100%)" }}>
+        <div className="drawer-header">
+          <h2 style={{ fontSize: 15 }}>{data.mode === "create" ? "Nova decisão" : "Editar decisão"}</h2>
+          <button className="drawer-close" onClick={onClose}><Icon name="x" /></button>
+        </div>
+        <form onSubmit={handleSubmit}>
+          <div className="drawer-body" style={{ padding: 18, maxHeight: "70vh" }}>
+            {!data.projectId && (
+              <div className="field-block" style={{ margin: "0 0 12px" }}>
+                <span className="k">Projeto</span>
+                <select value={projectId} onChange={(e) => setProjectId(e.target.value)} style={fieldInputStyle}>
+                  <option value="">Selecione um projeto…</option>
+                  {ctx.projects.filter((p) => !p.arquivado).map((p) => <option key={p.id} value={p.id}>{p.nome}</option>)}
+                </select>
+              </div>
+            )}
+            <div className="field-block" style={{ margin: "0 0 12px" }}>
+              <span className="k">Decisão</span>
+              <input type="text" value={decisao} onChange={(e) => setDecisao(e.target.value)} autoFocus style={fieldInputStyle} />
+            </div>
+            <div className="field-block" style={{ margin: "0 0 12px" }}>
+              <span className="k">Contexto</span>
+              <textarea value={contexto} onChange={(e) => setContexto(e.target.value)} rows={2} style={{ ...fieldInputStyle, resize: "vertical" }} />
+            </div>
+            <div className="field-block" style={{ margin: "0 0 12px" }}>
+              <span className="k">Motivo</span>
+              <textarea value={motivo} onChange={(e) => setMotivo(e.target.value)} rows={2} style={{ ...fieldInputStyle, resize: "vertical" }} />
+            </div>
+            <div className="field-block" style={{ margin: "0 0 12px" }}>
+              <span className="k">Alternativas consideradas</span>
+              <textarea value={alternativas} onChange={(e) => setAlternativas(e.target.value)} rows={2} style={{ ...fieldInputStyle, resize: "vertical" }} />
+            </div>
+            <div className="field-grid">
+              <div className="field"><span className="k">Data</span><input type="date" value={dataDecisao} onChange={(e) => setDataDecisao(e.target.value)} style={fieldInputStyle} /></div>
+              <div className="field"><span className="k">Responsável</span><PersonSelect ctx={ctx} value={responsavel} onChange={setResponsavel} role="responsavel" /></div>
+              <div className="field"><span className="k">Status</span><ConfigListSelect ctx={ctx} listId="decisao_status" value={status} onChange={setStatus} /></div>
+              <div className="field"><span className="k">Impacto</span><input type="text" value={impacto} onChange={(e) => setImpacto(e.target.value)} style={fieldInputStyle} /></div>
+              <div className="field"><span className="k">Reunião de origem</span>
+                <select value={reuniaoOrigemId} onChange={(e) => setReuniaoOrigemId(e.target.value)} style={fieldInputStyle}>
+                  <option value="">—</option>
+                  {reunioesDoProjeto.map((m) => <option key={m.id} value={m.id}>{m.titulo} ({fmtDate(m.data)})</option>)}
+                </select>
+              </div>
+            </div>
+            <div className="field-block" style={{ margin: "12px 0 0" }}>
+              <span className="k">Observações</span>
+              <textarea value={observacoes} onChange={(e) => setObservacoes(e.target.value)} rows={2} style={{ ...fieldInputStyle, resize: "vertical" }} />
+            </div>
+            {error && <div className="stale-alert" style={{ marginTop: 12 }}><Icon name="alert" size={12} /> {error}</div>}
+          </div>
+          <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", padding: "14px 18px", borderTop: "1px solid var(--border)" }}>
+            <button type="button" className="btn btn-ghost btn-sm" onClick={onClose}>Cancelar</button>
+            <button type="submit" className="btn btn-primary btn-sm">{data.mode === "create" ? "Criar decisão" : "Salvar alterações"}</button>
+          </div>
+        </form>
+      </div>
+    </div>
+  );
+}
+
+function PendencyFormModal({ data, ctx, onClose }) {
+  const p = data.pendency;
+  const [projectId, setProjectId] = useState(data.projectId || (p && p.projectId) || "");
+  const [pendencia, setPendencia] = useState(p ? p.pendencia : "");
+  const [responsavel, setResponsavel] = useState(p ? p.responsavel : "clara");
+  const [dependeDe, setDependeDe] = useState(p ? (p.dependeDe || "") : "");
+  const [dataAbertura, setDataAbertura] = useState(p ? p.dataAbertura : TODAY);
+  const [prazo, setPrazo] = useState(p ? (p.prazo || "") : "");
+  const [status, setStatus] = useState(p ? p.status : "Aberta");
+  const [prioridade, setPrioridade] = useState(p ? p.prioridade : "Média");
+  const [proximoAcompanhamento, setProximoAcompanhamento] = useState(p ? (p.proximoAcompanhamento || "") : "");
+  const [reuniaoOrigemId, setReuniaoOrigemId] = useState(p ? (p.reuniaoOrigemId || "") : "");
+  const [observacoes, setObservacoes] = useState(p ? (p.observacoes || "") : "");
+  const [error, setError] = useState("");
+  const reunioesDoProjeto = ctx.meetings.filter((m) => m.projectId === projectId);
+
+  function handleSubmit(e) {
+    e.preventDefault();
+    if (!pendencia.trim()) { setError("Preencha a pendência."); return; }
+    if (!projectId) { setError("Selecione um projeto."); return; }
+    const payload = { pendencia, responsavel, dependeDe: dependeDe || null, dataAbertura, prazo: prazo || null, status, prioridade, proximoAcompanhamento: proximoAcompanhamento || null, reuniaoOrigemId: reuniaoOrigemId || null, observacoes };
+    if (data.mode === "create") ctx.addPendencyManual({ ...payload, projectId });
+    else ctx.updatePendencyRecord(p.id, { ...payload, projectId });
+    onClose();
+  }
+
+  return (
+    <div className="overlay modal-center" onClick={onClose}>
+      <div className="modal-box" onClick={(e) => e.stopPropagation()} style={{ width: "min(560px, 100%)" }}>
+        <div className="drawer-header">
+          <h2 style={{ fontSize: 15 }}>{data.mode === "create" ? "Nova pendência" : "Editar pendência"}</h2>
+          <button className="drawer-close" onClick={onClose}><Icon name="x" /></button>
+        </div>
+        <form onSubmit={handleSubmit}>
+          <div className="drawer-body" style={{ padding: 18, maxHeight: "70vh" }}>
+            {!data.projectId && (
+              <div className="field-block" style={{ margin: "0 0 12px" }}>
+                <span className="k">Projeto</span>
+                <select value={projectId} onChange={(e) => setProjectId(e.target.value)} style={fieldInputStyle}>
+                  <option value="">Selecione um projeto…</option>
+                  {ctx.projects.filter((p) => !p.arquivado).map((p) => <option key={p.id} value={p.id}>{p.nome}</option>)}
+                </select>
+              </div>
+            )}
+            <div className="field-block" style={{ margin: "0 0 12px" }}>
+              <span className="k">Pendência</span>
+              <input type="text" value={pendencia} onChange={(e) => setPendencia(e.target.value)} autoFocus style={fieldInputStyle} />
+            </div>
+            <div className="field-grid">
+              <div className="field"><span className="k">Responsável</span><PersonSelect ctx={ctx} value={responsavel} onChange={setResponsavel} role="responsavel" /></div>
+              <div className="field"><span className="k">Depende de</span><PersonSelect ctx={ctx} value={dependeDe} onChange={setDependeDe} role="responsavel" allowEmpty emptyLabel="—" /></div>
+              <div className="field"><span className="k">Status</span><ConfigListSelect ctx={ctx} listId="pendencia_status" value={status} onChange={setStatus} /></div>
+              <div className="field"><span className="k">Prioridade</span><ConfigListSelect ctx={ctx} listId="pendencia_prioridade" value={prioridade} onChange={setPrioridade} /></div>
+              <div className="field"><span className="k">Data de abertura</span><input type="date" value={dataAbertura} onChange={(e) => setDataAbertura(e.target.value)} style={fieldInputStyle} /></div>
+              <div className="field"><span className="k">Prazo</span><input type="date" value={prazo} onChange={(e) => setPrazo(e.target.value)} style={fieldInputStyle} /></div>
+              <div className="field"><span className="k">Próximo acompanhamento</span><input type="date" value={proximoAcompanhamento} onChange={(e) => setProximoAcompanhamento(e.target.value)} style={fieldInputStyle} /></div>
+              <div className="field"><span className="k">Reunião de origem</span>
+                <select value={reuniaoOrigemId} onChange={(e) => setReuniaoOrigemId(e.target.value)} style={fieldInputStyle}>
+                  <option value="">—</option>
+                  {reunioesDoProjeto.map((m) => <option key={m.id} value={m.id}>{m.titulo} ({fmtDate(m.data)})</option>)}
+                </select>
+              </div>
+            </div>
+            <div className="field-block" style={{ margin: "12px 0 0" }}>
+              <span className="k">Observações</span>
+              <textarea value={observacoes} onChange={(e) => setObservacoes(e.target.value)} rows={2} style={{ ...fieldInputStyle, resize: "vertical" }} />
+            </div>
+            {error && <div className="stale-alert" style={{ marginTop: 12 }}><Icon name="alert" size={12} /> {error}</div>}
+          </div>
+          <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", padding: "14px 18px", borderTop: "1px solid var(--border)" }}>
+            <button type="button" className="btn btn-ghost btn-sm" onClick={onClose}>Cancelar</button>
+            <button type="submit" className="btn btn-primary btn-sm">{data.mode === "create" ? "Criar pendência" : "Salvar alterações"}</button>
+          </div>
+        </form>
+      </div>
+    </div>
+  );
+}
+
+function RiskFormModal({ data, ctx, onClose }) {
+  const r = data.risk;
+  const [projectId, setProjectId] = useState(data.projectId || (r && r.projectId) || "");
+  const [tipo, setTipo] = useState(r ? r.tipo : "Risco");
+  const [descricao, setDescricao] = useState(r ? (r.descricao || "") : "");
+  const [causa, setCausa] = useState(r ? (r.causa || "") : "");
+  const [consequencia, setConsequencia] = useState(r ? (r.consequencia || "") : "");
+  const [probabilidade, setProbabilidade] = useState(r ? (r.probabilidade || "") : "");
+  const [impacto, setImpacto] = useState(r ? (r.impacto || "") : "");
+  const [responsavel, setResponsavel] = useState(r ? r.responsavel : "clara");
+  const [planoAcao, setPlanoAcao] = useState(r ? (r.planoAcao || "") : "");
+  const [prazo, setPrazo] = useState(r ? (r.prazo || "") : "");
+  const [status, setStatus] = useState(r ? r.status : "Ativo");
+  const [reuniaoOrigemId, setReuniaoOrigemId] = useState(r ? (r.reuniaoOrigemId || "") : "");
+  const [observacoes, setObservacoes] = useState(r ? (r.observacoes || "") : "");
+  const [error, setError] = useState("");
+  const reunioesDoProjeto = ctx.meetings.filter((m) => m.projectId === projectId);
+
+  function handleSubmit(e) {
+    e.preventDefault();
+    if (!descricao.trim()) { setError("Preencha a descrição."); return; }
+    if (!projectId) { setError("Selecione um projeto."); return; }
+    const payload = { tipo, descricao, causa, consequencia, probabilidade: probabilidade || null, impacto: impacto || null, responsavel, planoAcao, prazo: prazo || null, status, reuniaoOrigemId: reuniaoOrigemId || null, observacoes };
+    if (data.mode === "create") ctx.addRiskManual({ ...payload, projectId });
+    else ctx.updateRiskRecord(r.id, { ...payload, projectId });
+    onClose();
+  }
+
+  return (
+    <div className="overlay modal-center" onClick={onClose}>
+      <div className="modal-box" onClick={(e) => e.stopPropagation()} style={{ width: "min(560px, 100%)" }}>
+        <div className="drawer-header">
+          <h2 style={{ fontSize: 15 }}>{data.mode === "create" ? "Novo risco / problema / impedimento" : "Editar risco / problema / impedimento"}</h2>
+          <button className="drawer-close" onClick={onClose}><Icon name="x" /></button>
+        </div>
+        <form onSubmit={handleSubmit}>
+          <div className="drawer-body" style={{ padding: 18, maxHeight: "70vh" }}>
+            {!data.projectId && (
+              <div className="field-block" style={{ margin: "0 0 12px" }}>
+                <span className="k">Projeto</span>
+                <select value={projectId} onChange={(e) => setProjectId(e.target.value)} style={fieldInputStyle}>
+                  <option value="">Selecione um projeto…</option>
+                  {ctx.projects.filter((p) => !p.arquivado).map((p) => <option key={p.id} value={p.id}>{p.nome}</option>)}
+                </select>
+              </div>
+            )}
+            <div className="field-block" style={{ margin: "0 0 12px" }}>
+              <span className="k">Descrição</span>
+              <input type="text" value={descricao} onChange={(e) => setDescricao(e.target.value)} autoFocus style={fieldInputStyle} />
+            </div>
+            <div className="field-block" style={{ margin: "0 0 12px" }}>
+              <span className="k">Causa</span>
+              <textarea value={causa} onChange={(e) => setCausa(e.target.value)} rows={2} style={{ ...fieldInputStyle, resize: "vertical" }} />
+            </div>
+            <div className="field-block" style={{ margin: "0 0 12px" }}>
+              <span className="k">Consequência</span>
+              <textarea value={consequencia} onChange={(e) => setConsequencia(e.target.value)} rows={2} style={{ ...fieldInputStyle, resize: "vertical" }} />
+            </div>
+            <div className="field-grid">
+              <div className="field"><span className="k">Tipo</span><ConfigListSelect ctx={ctx} listId="risco_tipo" value={tipo} onChange={setTipo} /></div>
+              <div className="field"><span className="k">Status</span><ConfigListSelect ctx={ctx} listId="risco_status" value={status} onChange={setStatus} /></div>
+              <div className="field"><span className="k">Probabilidade</span><ConfigListSelect ctx={ctx} listId="risco_probabilidade" value={probabilidade} onChange={setProbabilidade} allowEmpty emptyLabel="—" /></div>
+              <div className="field"><span className="k">Impacto</span><ConfigListSelect ctx={ctx} listId="risco_impacto" value={impacto} onChange={setImpacto} allowEmpty emptyLabel="—" /></div>
+              <div className="field"><span className="k">Responsável</span><PersonSelect ctx={ctx} value={responsavel} onChange={setResponsavel} role="responsavel" /></div>
+              <div className="field"><span className="k">Prazo</span><input type="date" value={prazo} onChange={(e) => setPrazo(e.target.value)} style={fieldInputStyle} /></div>
+              <div className="field"><span className="k">Reunião de origem</span>
+                <select value={reuniaoOrigemId} onChange={(e) => setReuniaoOrigemId(e.target.value)} style={fieldInputStyle}>
+                  <option value="">—</option>
+                  {reunioesDoProjeto.map((m) => <option key={m.id} value={m.id}>{m.titulo} ({fmtDate(m.data)})</option>)}
+                </select>
+              </div>
+            </div>
+            <div className="field-block" style={{ margin: "12px 0 0" }}>
+              <span className="k">Plano de ação</span>
+              <textarea value={planoAcao} onChange={(e) => setPlanoAcao(e.target.value)} rows={2} style={{ ...fieldInputStyle, resize: "vertical" }} />
+            </div>
+            <div className="field-block" style={{ margin: "12px 0 0" }}>
+              <span className="k">Observações</span>
+              <textarea value={observacoes} onChange={(e) => setObservacoes(e.target.value)} rows={2} style={{ ...fieldInputStyle, resize: "vertical" }} />
+            </div>
+            {error && <div className="stale-alert" style={{ marginTop: 12 }}><Icon name="alert" size={12} /> {error}</div>}
+          </div>
+          <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", padding: "14px 18px", borderTop: "1px solid var(--border)" }}>
+            <button type="button" className="btn btn-ghost btn-sm" onClick={onClose}>Cancelar</button>
+            <button type="submit" className="btn btn-primary btn-sm">{data.mode === "create" ? "Criar registro" : "Salvar alterações"}</button>
+          </div>
+        </form>
+      </div>
+    </div>
+  );
+}
+
+/* ==================================================================================
+   IMPORTAR WORD (.docx) PARA ANOTAÇÕES — via Mammoth.js, 100% no navegador
+   ================================================================================== */
+function ImportarWordModal({ ctx, projectId, onClose }) {
+  const [fileName, setFileName] = useState("");
+  const [status, setStatus] = useState("idle"); // idle | lendo | pronto | erro
+  const [html, setHtml] = useState("");
+  const [warnings, setWarnings] = useState([]);
+  const [error, setError] = useState("");
+  const [titulo, setTitulo] = useState("");
+  const [tipo, setTipo] = useState("Anotação"); // Anotação | Ata | Transcrição
+  const [selProjectId, setSelProjectId] = useState(projectId || "");
+  const [meetingId, setMeetingId] = useState("");
+  const [categoria, setCategoria] = useState("");
+  const [tagsText, setTagsText] = useState("");
+  const fileRef = useRef(null);
+
+  const reunioesDoProjeto = ctx.meetings.filter((m) => m.projectId === selProjectId);
+
+  function handleFile(e) {
+    setError(""); setStatus("idle"); setHtml(""); setWarnings([]);
+    const file = e.target.files && e.target.files[0];
+    if (!file) return;
+    if (!/\.docx$/i.test(file.name)) { setError("Selecione um arquivo .docx."); return; }
+    setFileName(file.name);
+    setTitulo(file.name.replace(/\.docx$/i, ""));
+    setStatus("lendo");
+    const reader = new FileReader();
+    reader.onload = () => {
+      if (!window.mammoth) { setError("Biblioteca de conversão (Mammoth.js) não carregou — verifique a conexão e tente novamente."); setStatus("erro"); return; }
+      window.mammoth.convertToHtml({ arrayBuffer: reader.result })
+        .then((result) => {
+          setHtml(result.value || "");
+          setWarnings((result.messages || []).map((m) => m.message));
+          setStatus("pronto");
+        })
+        .catch((err) => {
+          console.warn("Falha ao converter .docx:", err);
+          setError("Não foi possível ler este arquivo. Verifique se é um .docx válido.");
+          setStatus("erro");
+        });
+    };
+    reader.onerror = () => { setError("Não foi possível ler o arquivo."); setStatus("erro"); };
+    reader.readAsArrayBuffer(file);
+  }
+
+  function handleImportar() {
+    if (!html) return;
+    const tags = tagsText.split(",").map((t) => t.trim()).filter(Boolean);
+    ctx.addNote({
+      titulo: titulo || fileName.replace(/\.docx$/i, ""), conteudoHtml: html,
+      categoria: categoria || null, tags, projectId: selProjectId || null,
+      meetingId: tipo !== "Anotação" ? (meetingId || null) : null,
+      origemTipo: tipo, origemArquivo: fileName,
+    });
+    ctx.setToast("Anotação importada do Word.");
+    onClose();
+  }
+
+  return (
+    <div className="overlay modal-center" onClick={onClose}>
+      <div className="modal-box" onClick={(e) => e.stopPropagation()} style={{ width: "min(680px, 100%)" }}>
+        <div className="drawer-header">
+          <h2 style={{ fontSize: 15 }}>Importar Word para Anotações</h2>
+          <button className="drawer-close" onClick={onClose}><Icon name="x" /></button>
+        </div>
+        <div className="drawer-body" style={{ padding: 18, maxHeight: "75vh" }}>
+          {status === "idle" && (
+            <div className="field-block" style={{ margin: "0 0 12px" }}>
+              <span className="k">Arquivo (.docx)</span>
+              <input ref={fileRef} type="file" accept=".docx" onChange={handleFile} style={fieldInputStyle} />
+              <span className="hint" style={{ marginTop: 6, display: "block" }}>
+                A conversão acontece inteiramente no seu navegador (via Mammoth.js) — o arquivo não é enviado para nenhum servidor.
+              </span>
+            </div>
+          )}
+          {status === "lendo" && <EmptyState text={`Lendo ${fileName}…`} />}
+          {error && <div className="stale-alert" style={{ marginBottom: 12 }}><Icon name="alert" size={12} /> {error}</div>}
+
+          {status === "pronto" && (
+            <>
+              <div className="field-block" style={{ margin: "0 0 12px" }}>
+                <span className="k">Título</span>
+                <input type="text" value={titulo} onChange={(e) => setTitulo(e.target.value)} style={fieldInputStyle} />
+              </div>
+              <div className="field-grid" style={{ marginTop: 0 }}>
+                <div className="field"><span className="k">Tipo</span>
+                  <select value={tipo} onChange={(e) => setTipo(e.target.value)} style={fieldInputStyle}>
+                    <option value="Anotação">Anotação</option>
+                    <option value="Ata">Ata</option>
+                    <option value="Transcrição">Transcrição</option>
+                  </select>
+                </div>
+                <div className="field"><span className="k">Projeto</span>
+                  <select value={selProjectId} onChange={(e) => { setSelProjectId(e.target.value); setMeetingId(""); }} style={fieldInputStyle}>
+                    <option value="">Geral (sem projeto)</option>
+                    {ctx.projects.filter((p) => !p.arquivado).map((p) => <option key={p.id} value={p.id}>{p.nome}</option>)}
+                  </select>
+                </div>
+                {tipo !== "Anotação" && selProjectId && (
+                  <div className="field"><span className="k">Reunião vinculada</span>
+                    <select value={meetingId} onChange={(e) => setMeetingId(e.target.value)} style={fieldInputStyle}>
+                      <option value="">—</option>
+                      {reunioesDoProjeto.map((m) => <option key={m.id} value={m.id}>{m.titulo} ({fmtDate(m.data)})</option>)}
+                    </select>
+                  </div>
+                )}
+                <div className="field"><span className="k">Categoria</span><ConfigListSelect ctx={ctx} listId="nota_categoria" value={categoria} onChange={setCategoria} allowEmpty emptyLabel="—" /></div>
+              </div>
+              <div className="field-block" style={{ margin: "0 0 12px" }}>
+                <span className="k">Tags (separadas por vírgula)</span>
+                <input type="text" value={tagsText} onChange={(e) => setTagsText(e.target.value)} style={fieldInputStyle} />
+              </div>
+              {warnings.length > 0 && (
+                <div className="stale-alert" style={{ marginBottom: 12 }}>
+                  <Icon name="alert" size={12} /> Algumas formatações do documento original podem não ter sido preservadas ({warnings.length} aviso(s) do conversor).
+                </div>
+              )}
+              <div className="field-block" style={{ margin: "0 0 6px" }}>
+                <span className="k">Pré-visualização do conteúdo importado</span>
+                <div className="note-editor-content" style={{ border: "1px solid var(--border)", borderRadius: 8, padding: 12, maxHeight: 260, overflowY: "auto", background: "var(--surface)" }}
+                  dangerouslySetInnerHTML={{ __html: html }} />
+              </div>
+              <p className="hint" style={{ margin: "6px 0 0" }}>
+                O arquivo .docx original não é enviado nem armazenado — apenas o conteúdo é importado como anotação
+                na Central. Guardar o arquivo original em Materiais (com escolha de conta e pasta no Drive) é uma
+                evolução prevista para uma próxima fase.
+              </p>
+            </>
+          )}
+        </div>
+        <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", padding: "14px 18px", borderTop: "1px solid var(--border)" }}>
+          <button type="button" className="btn btn-ghost btn-sm" onClick={onClose}>Cancelar</button>
+          {status === "pronto" && <button type="button" className="btn btn-primary btn-sm" onClick={handleImportar}>Importar como anotação</button>}
+        </div>
       </div>
     </div>
   );
