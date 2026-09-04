@@ -706,12 +706,14 @@ table.data-table tbody tr:last-child td { border-bottom: none; }
 .calendar-item-chip.kind-reuniao { border-left-color: var(--info); }
 .calendar-item-chip.kind-tarefa { border-left-color: var(--accent-strong); }
 .calendar-item-chip.kind-marco { border-left-color: var(--success); }
+.calendar-item-chip.kind-google { border-left-color: var(--neutral); }
 .calendar-more { font-size: 10px; color: var(--text-muted); padding-left: 2px; }
 .calendar-day-dots { display: none; gap: 3px; }
 .calendar-dot { width: 5px; height: 5px; border-radius: 50%; background: var(--neutral); }
 .calendar-dot.kind-reuniao { background: var(--info); }
 .calendar-dot.kind-tarefa { background: var(--accent-strong); }
 .calendar-dot.kind-marco { background: var(--success); }
+.calendar-dot.kind-google { background: var(--neutral); }
 
 /* -------------------------------------- GANTT -------------------------------------------- */
 .gantt-card { padding: 18px 18px 6px; overflow-x: auto; }
@@ -909,9 +911,21 @@ const TODAY = todayIso();
    colar aqui embaixo — ver o guia de configuração que acompanha este arquivo.
    Enquanto o valor abaixo não for substituído, o app mostra uma tela avisando que
    falta configurar, em vez de travar ou dar erro confuso. */
-const GOOGLE_CLIENT_ID = "394531176143-69mtdn1qcnpmuvib4fuggjcjfd7m41ak.apps.googleusercontent.com";
+const GOOGLE_CLIENT_ID = "COLE_AQUI_SEU_CLIENT_ID";
 const GOOGLE_DRIVE_SCOPE = "https://www.googleapis.com/auth/drive.file";
 const DRIVE_DATA_FILENAME = "central-projetos-dados.json";
+
+/* --------------------- contas Google conectadas (Fase 2) ---------------------
+   A conta de dados da Central (acima) é independente destas: mantém seu próprio token
+   client e nunca é afetada pelo que acontece aqui. "Contas Google conectadas" são contas
+   adicionais (pessoal, profissional, outras) que a pessoa pode ligar para usar Google
+   Drive e/ou Google Agenda a partir da Central — cada uma com seu próprio token client e
+   seu próprio access token, sempre em memória, nunca persistidos (ver connectGoogleAccount
+   mais abaixo). O escopo de cada conta é montado dinamicamente conforme o que a pessoa
+   marcar ao conectar (Drive e/ou Agenda) — nunca pede mais acesso do que o selecionado. */
+const GOOGLE_CALENDAR_READONLY_SCOPE = "https://www.googleapis.com/auth/calendar.readonly";
+const GOOGLE_USERINFO_EMAIL_SCOPE = "https://www.googleapis.com/auth/userinfo.email";
+const GOOGLE_OPENID_SCOPE = "openid";
 
 /* --------------------------------- PESSOAS -------------------------------- */
 /* PEOPLE existe apenas como semente da migração única para a coleção "pessoas" (cadastro real,
@@ -1122,6 +1136,17 @@ function fmtDate(iso) {
   if (!iso) return "—";
   const [y, m, d] = iso.split("-");
   return `${d}/${m}/${y}`;
+}
+/* formata um timestamp ISO completo (ex.: "última sincronização"), diferente de fmtDate (que espera só data) */
+function fmtDateTime(iso) {
+  if (!iso) return "—";
+  const dt = new Date(iso);
+  if (isNaN(dt.getTime())) return "—";
+  const dd = String(dt.getDate()).padStart(2, "0");
+  const mm = String(dt.getMonth() + 1).padStart(2, "0");
+  const hh = String(dt.getHours()).padStart(2, "0");
+  const mi = String(dt.getMinutes()).padStart(2, "0");
+  return `${dd}/${mm}/${dt.getFullYear()} ${hh}:${mi}`;
 }
 function fmtDateLong(iso) {
   if (!iso) return "—";
@@ -1533,6 +1558,20 @@ function App() {
     GOOGLE_CLIENT_ID.indexOf("COLE_AQUI") === 0 ? "nao-configurado" : "verificando"
   ); // nao-configurado | verificando | deslogado | entrando | logado | erro
 
+  /* ---- contas Google conectadas (Fase 2): Drive e/ou Agenda, independentes da conta de dados acima ----
+     googleAccountTokensRef guarda, só em memória (nunca persistido), o token client e o access token de
+     cada conta: { [accountId]: { tokenClient, accessToken } }. googleAccounts é o metadado não sensível
+     de cada conta (id, e-mail, apelido, quais serviços usa, calendários escolhidos, última sincronização)
+     — isso sim é persistido no Drive da conta de dados da Central, junto com o resto dos dados. */
+  const googleAccountTokensRef = useRef({});
+  const [googleAccounts, setGoogleAccounts] = useState([]); // metadados não sensíveis (ver comentário acima)
+  const [googleAccountStatus, setGoogleAccountStatus] = useState({}); // { [accountId]: "conectando"|"conectado"|"desconectado"|"sessao-expirada"|"erro" } — nunca persistido, some ao recarregar a página
+  const [googleAccountError, setGoogleAccountError] = useState({}); // { [accountId]: mensagem amigável }
+  const [googleCalendarsByAccount, setGoogleCalendarsByAccount] = useState({}); // { [accountId]: [{id,nome,cor,principal}] } — recarregado a cada sessão, não persistido
+  const [googleEvents, setGoogleEvents] = useState([]); // eventos da Google Agenda carregados na sessão atual — não persistidos (recarregados a cada sincronização)
+  const [googleEventsSyncStatus, setGoogleEventsSyncStatus] = useState("idle"); // idle | syncing | error
+  const [googleEventLinks, setGoogleEventLinks] = useState([]); // persistido: [{id: accountId__calendarId__eventId, projectId}] — vínculo evento↔projeto sobrevive porque os eventos em si são recarregados a cada sessão
+
   useEffect(() => {
     if (authStatus === "nao-configurado") return;
     let cancelled = false;
@@ -1626,6 +1665,282 @@ function App() {
       const parsed = JSON.parse(text);
       return { meta: parsed.meta || {}, collections: parsed.collections || {} };
     } catch (e) { return { meta: {}, collections: {} }; }
+  }
+
+  /* ==========================================================================
+     CONTAS GOOGLE CONECTADAS (Fase 2) — Drive e/ou Agenda, além da conta de dados
+     Cada conta tem seu próprio token client e access token (googleAccountTokensRef,
+     só em memória). Uma falha de conexão ou de sincronização em uma conta nunca deve
+     afetar a conta de dados da Central nem as outras contas conectadas — por isso todo
+     erro aqui é isolado por accountId, tanto no estado quanto no try/catch.
+     ========================================================================== */
+  function buildGoogleAccountScope({ usaDrive, usaAgenda }) {
+    const scopes = [GOOGLE_OPENID_SCOPE, GOOGLE_USERINFO_EMAIL_SCOPE];
+    if (usaDrive) scopes.push(GOOGLE_DRIVE_SCOPE);
+    if (usaAgenda) scopes.push(GOOGLE_CALENDAR_READONLY_SCOPE);
+    return scopes.join(" ");
+  }
+
+  /* fetch autenticado para uma conta adicional específica — mesmo padrão de driveFetch (refresh
+     silencioso em 401, uma tentativa), mas isolado por conta: uma sessão expirada aqui só marca
+     essa conta como "sessao-expirada", nunca mexe em authStatus nem nas outras contas */
+  function googleAccountFetch(accountId, url, options = {}) {
+    const tokenEntry = googleAccountTokensRef.current[accountId];
+    if (!tokenEntry) return Promise.reject(new Error("Conta Google não conectada."));
+    const withAuth = (opts) => ({ ...opts, headers: { ...(opts.headers || {}), Authorization: "Bearer " + tokenEntry.accessToken } });
+    return fetch(url, withAuth(options)).then(async (res) => {
+      if (res.status !== 401) return res;
+      const refreshed = await new Promise((resolve) => {
+        tokenEntry.tokenClient.callback = (resp) => {
+          if (resp.error) { resolve(false); return; }
+          tokenEntry.accessToken = resp.access_token;
+          resolve(true);
+        };
+        tokenEntry.tokenClient.requestAccessToken({ prompt: "" });
+      });
+      if (!refreshed) { setGoogleAccountStatus((prev) => ({ ...prev, [accountId]: "sessao-expirada" })); return res; }
+      return fetch(url, withAuth(options));
+    });
+  }
+
+  /* conecta uma conta Google nova (ou reconecta, se o e-mail escolhido já corresponder a uma conta
+     já cadastrada) com o escopo montado a partir do que a pessoa marcou (Drive e/ou Agenda) */
+  function connectGoogleAccount({ apelido, usaDrive, usaAgenda }) {
+    if (!usaDrive && !usaAgenda) { setToast("Selecione Google Drive e/ou Google Agenda para conectar a conta."); return; }
+    if (!window.google || !window.google.accounts || !window.google.accounts.oauth2) {
+      setToast("O login do Google ainda não carregou. Aguarde alguns segundos e tente novamente.");
+      return;
+    }
+    const tempId = "ga" + (Date.now() % 100000) + Math.floor(Math.random() * 99);
+    setGoogleAccountStatus((prev) => ({ ...prev, [tempId]: "conectando" }));
+    const scope = buildGoogleAccountScope({ usaDrive, usaAgenda });
+    const tokenClient = window.google.accounts.oauth2.initTokenClient({
+      client_id: GOOGLE_CLIENT_ID,
+      scope,
+      callback: async (resp) => {
+        if (resp.error) {
+          setGoogleAccountStatus((prev) => { const n = { ...prev }; delete n[tempId]; return n; });
+          setToast("Não foi possível conectar a conta Google.");
+          return;
+        }
+        try {
+          const userinfoRes = await fetch("https://www.googleapis.com/oauth2/v3/userinfo", {
+            headers: { Authorization: "Bearer " + resp.access_token },
+          });
+          if (!userinfoRes.ok) throw new Error("Falha ao identificar a conta (HTTP " + userinfoRes.status + ")");
+          const info = await userinfoRes.json();
+          const email = info.email || "";
+          // evita duplicar: se essa conta (mesmo e-mail) já estiver cadastrada, reconecta nela em vez de criar outra
+          const existing = googleAccounts.find((a) => a.email === email);
+          const accountId = existing ? existing.id : tempId;
+          googleAccountTokensRef.current[accountId] = { tokenClient, accessToken: resp.access_token };
+          setGoogleAccountStatus((prev) => {
+            const n = { ...prev };
+            if (existing) delete n[tempId];
+            n[accountId] = "conectado";
+            return n;
+          });
+          setGoogleAccountError((prev) => { const n = { ...prev }; delete n[accountId]; return n; });
+          const rec = existing
+            ? { ...existing, usaDrive: existing.usaDrive || !!usaDrive, usaAgenda: existing.usaAgenda || !!usaAgenda }
+            : {
+                id: accountId, email, apelido: (apelido || "").trim() || email,
+                usaDrive: !!usaDrive, usaAgenda: !!usaAgenda,
+                calendariosSelecionados: ["primary"], ultimaSincronizacao: null, criadoEm: new Date().toISOString(),
+              };
+          setGoogleAccounts((prev) => (existing ? prev.map((a) => (a.id === accountId ? rec : a)) : [...prev, rec]));
+          persistDoc("googleAccountsMeta", accountId, rec);
+          setToast((existing ? "Conta reconectada: " : "Conta Google conectada: ") + email);
+          if (rec.usaAgenda) {
+            await fetchAccountCalendarList(accountId);
+            await syncGoogleAgenda([rec], { silent: true });
+          }
+        } catch (e) {
+          console.warn("Falha ao identificar conta Google:", e);
+          setGoogleAccountStatus((prev) => ({ ...prev, [tempId]: "erro" }));
+          setGoogleAccountError((prev) => ({ ...prev, [tempId]: "Não foi possível identificar essa conta Google." }));
+        }
+      },
+    });
+    tokenClient.requestAccessToken({ prompt: "consent" });
+  }
+
+  /* reconecta uma conta já cadastrada (após expirar ou após "Desconectar") — usa o mesmo escopo já
+     salvo para essa conta e sugere o e-mail certo no seletor de contas do Google (hint) */
+  function reconnectGoogleAccount(accountId) {
+    const acc = googleAccounts.find((a) => a.id === accountId);
+    if (!acc) return;
+    if (!window.google || !window.google.accounts || !window.google.accounts.oauth2) {
+      setToast("O login do Google ainda não carregou. Aguarde alguns segundos e tente novamente.");
+      return;
+    }
+    setGoogleAccountStatus((prev) => ({ ...prev, [accountId]: "conectando" }));
+    const scope = buildGoogleAccountScope({ usaDrive: acc.usaDrive, usaAgenda: acc.usaAgenda });
+    const tokenClient = window.google.accounts.oauth2.initTokenClient({
+      client_id: GOOGLE_CLIENT_ID,
+      scope,
+      hint: acc.email,
+      callback: (resp) => {
+        if (resp.error) {
+          setGoogleAccountStatus((prev) => ({ ...prev, [accountId]: "erro" }));
+          setGoogleAccountError((prev) => ({ ...prev, [accountId]: "Não foi possível reconectar essa conta." }));
+          return;
+        }
+        googleAccountTokensRef.current[accountId] = { tokenClient, accessToken: resp.access_token };
+        setGoogleAccountStatus((prev) => ({ ...prev, [accountId]: "conectado" }));
+        setGoogleAccountError((prev) => { const n = { ...prev }; delete n[accountId]; return n; });
+        setToast("Conta reconectada: " + acc.email);
+        if (acc.usaAgenda) { fetchAccountCalendarList(accountId).then(() => syncGoogleAgenda([acc], { silent: true })); }
+      },
+    });
+    tokenClient.requestAccessToken({ prompt: "consent" });
+  }
+
+  /* desconecta (revoga o token e esquece a sessão em memória) mas mantém o cadastro da conta, para
+     reconectar depois — os eventos dessa conta somem da tela até reconectar e sincronizar de novo */
+  function disconnectGoogleAccount(accountId) {
+    const tok = googleAccountTokensRef.current[accountId];
+    if (tok && tok.accessToken && window.google && window.google.accounts && window.google.accounts.oauth2) {
+      window.google.accounts.oauth2.revoke(tok.accessToken, () => {});
+    }
+    delete googleAccountTokensRef.current[accountId];
+    setGoogleAccountStatus((prev) => ({ ...prev, [accountId]: "desconectado" }));
+    setGoogleCalendarsByAccount((prev) => { const n = { ...prev }; delete n[accountId]; return n; });
+    setGoogleEvents((prev) => prev.filter((e) => e.accountId !== accountId));
+  }
+
+  /* remove definitivamente uma conta conectada: desconecta, apaga o cadastro (Drive) e os vínculos
+     evento↔projeto dela — as reuniões já importadas a partir de eventos dessa conta não são apagadas */
+  function removeGoogleAccount(accountId) {
+    disconnectGoogleAccount(accountId);
+    setGoogleAccounts((prev) => prev.filter((a) => a.id !== accountId));
+    setGoogleAccountStatus((prev) => { const n = { ...prev }; delete n[accountId]; return n; });
+    setGoogleAccountError((prev) => { const n = { ...prev }; delete n[accountId]; return n; });
+    deleteDocRemote("googleAccountsMeta", accountId);
+    const prefix = accountId + "__";
+    const linksToRemove = googleEventLinks.filter((l) => l.id.indexOf(prefix) === 0);
+    if (linksToRemove.length) {
+      setGoogleEventLinks((prev) => prev.filter((l) => l.id.indexOf(prefix) !== 0));
+      linksToRemove.forEach((l) => deleteDocRemote("googleEventLinks", l.id));
+    }
+    setToast("Conta Google removida.");
+  }
+
+  async function fetchAccountCalendarList(accountId) {
+    try {
+      const res = await googleAccountFetch(accountId, "https://www.googleapis.com/calendar/v3/users/me/calendarList?maxResults=250");
+      if (!res || !res.ok) throw new Error("Falha ao listar calendários (HTTP " + (res && res.status) + ")");
+      const json = await res.json();
+      const cals = (json.items || []).map((c) => ({ id: c.id, nome: c.summaryOverride || c.summary || c.id, cor: c.backgroundColor || "", principal: !!c.primary }));
+      setGoogleCalendarsByAccount((prev) => ({ ...prev, [accountId]: cals }));
+      return cals;
+    } catch (e) {
+      console.warn("Falha ao listar calendários da conta " + accountId + ":", e);
+      setToast("Não foi possível carregar os calendários dessa conta.");
+      return [];
+    }
+  }
+
+  /* altera quais calendários dessa conta entram na Central (padrão: só o principal) */
+  function updateGoogleAccountCalendarios(accountId, calendarIds) {
+    setGoogleAccounts((prev) => prev.map((a) => {
+      if (a.id !== accountId) return a;
+      const next = { ...a, calendariosSelecionados: calendarIds };
+      persistDoc("googleAccountsMeta", accountId, next);
+      return next;
+    }));
+  }
+
+  /* busca eventos das contas conectadas com Agenda habilitada, numa janela fixa (60 dias atrás a 180
+     dias à frente) — suficiente para o Calendário e o Cronograma Geral da Central. Se contasOverride
+     for passado (ex.: logo após conectar uma conta), sincroniza só essa conta, preservando os eventos
+     já carregados das demais. Cada conta/calendário é tratado com seu próprio try/catch: uma falha em
+     um não impede os outros de sincronizarem. */
+  async function syncGoogleAgenda(contasOverride, opts = {}) {
+    const silent = !!opts.silent;
+    const usingOverride = !!contasOverride;
+    const contas = (contasOverride || googleAccounts).filter((a) => a.usaAgenda && (usingOverride || googleAccountStatus[a.id] === "conectado"));
+    if (contas.length === 0) { if (!silent) setToast("Nenhuma conta com Google Agenda conectada."); return; }
+    setGoogleEventsSyncStatus("syncing");
+    const timeMin = new Date(Date.now() - 60 * 24 * 60 * 60 * 1000).toISOString();
+    const timeMax = new Date(Date.now() + 180 * 24 * 60 * 60 * 1000).toISOString();
+    const allEvents = [];
+    let anyError = false;
+    for (const conta of contas) {
+      const calendarIds = (conta.calendariosSelecionados && conta.calendariosSelecionados.length) ? conta.calendariosSelecionados : ["primary"];
+      for (const calendarId of calendarIds) {
+        try {
+          const url = "https://www.googleapis.com/calendar/v3/calendars/" + encodeURIComponent(calendarId) +
+            "/events?singleEvents=true&orderBy=startTime&maxResults=250&timeMin=" + encodeURIComponent(timeMin) + "&timeMax=" + encodeURIComponent(timeMax);
+          const res = await googleAccountFetch(conta.id, url);
+          if (!res || !res.ok) { anyError = true; continue; }
+          const json = await res.json();
+          (json.items || []).forEach((ev) => {
+            if (ev.status === "cancelled") return;
+            const startIso = (ev.start && (ev.start.dateTime || ev.start.date)) || null;
+            if (!startIso) return;
+            allEvents.push({
+              key: conta.id + "__" + calendarId + "__" + ev.id,
+              accountId: conta.id, calendarId, eventId: ev.id,
+              titulo: ev.summary || "(sem título)",
+              descricao: ev.description || "",
+              local: ev.location || "",
+              data: startIso.slice(0, 10),
+              horario: ev.start.dateTime ? startIso.slice(11, 16) : "",
+              diaInteiro: !ev.start.dateTime,
+              fim: (ev.end && (ev.end.dateTime || ev.end.date)) || null,
+              organizador: ev.organizer ? (ev.organizer.displayName || ev.organizer.email || "") : "",
+              participantes: (ev.attendees || []).map((p) => p.displayName || p.email).filter(Boolean),
+              meetLink: ev.hangoutLink || "",
+              htmlLink: ev.htmlLink || "",
+            });
+          });
+        } catch (e) {
+          console.warn("Falha ao buscar eventos da agenda:", conta.email, calendarId, e);
+          anyError = true;
+        }
+      }
+      const nowIso = new Date().toISOString();
+      setGoogleAccounts((prev) => prev.map((a) => {
+        if (a.id !== conta.id) return a;
+        const next = { ...a, ultimaSincronizacao: nowIso };
+        persistDoc("googleAccountsMeta", conta.id, next);
+        return next;
+      }));
+    }
+    const processedIds = new Set(contas.map((c) => c.id));
+    setGoogleEvents((prev) => [...prev.filter((e) => !processedIds.has(e.accountId)), ...allEvents]);
+    setGoogleEventsSyncStatus(anyError ? "error" : "idle");
+    if (!silent) {
+      if (anyError) setToast("Agenda sincronizada com alguns erros — verifique as contas conectadas.");
+      else setToast("Google Agenda sincronizada.");
+    }
+  }
+
+  /* vincula (ou desvincula, se projectId for null) um evento do Google Agenda a um projeto da Central */
+  function linkGoogleEventToProject(eventKey, projectId) {
+    setGoogleEventLinks((prev) => {
+      const next = prev.filter((l) => l.id !== eventKey);
+      if (projectId) next.push({ id: eventKey, projectId });
+      return next;
+    });
+    if (projectId) persistDoc("googleEventLinks", eventKey, { id: eventKey, projectId });
+    else deleteDocRemote("googleEventLinks", eventKey);
+  }
+
+  /* importa um evento do Google Agenda como reunião da Central — evita duplicar se esse evento já
+     tiver sido importado antes (dedup por accountId+calendarId+eventId, guardado em meeting.googleEvent) */
+  function importGoogleEventAsMeeting(ev, projectId) {
+    if (!projectId) { setToast("Selecione um projeto para importar este evento como reunião."); return null; }
+    const dup = meetings.find((m) => m.googleEvent && m.googleEvent.accountId === ev.accountId && m.googleEvent.calendarId === ev.calendarId && m.googleEvent.eventId === ev.eventId);
+    if (dup) { setToast("Este evento do Google Agenda já foi importado como reunião."); return dup; }
+    const rec = addMeetingManual({
+      titulo: ev.titulo, projectId, data: ev.data, horario: ev.horario, objetivo: ev.descricao || "",
+      googleEvent: { accountId: ev.accountId, calendarId: ev.calendarId, eventId: ev.eventId },
+    });
+    linkGoogleEventToProject(ev.key, projectId);
+    setToast("Reunião importada do Google Agenda.");
+    return rec;
   }
 
   /* Executa de fato o PATCH no Google Drive e resolve/rejeita os "waiters" (chamadores que estão
@@ -1763,6 +2078,7 @@ function App() {
             empresas: setEmpresas, pessoas: setPessoas,
             listas: (arr) => { const obj = {}; arr.forEach((doc) => { obj[doc.id] = doc.itens || []; }); setListas((prev) => ({ ...prev, ...obj })); },
             identidadeVisual: (arr) => { if (arr[0]) setIdentidadeVisual(arr[0]); },
+            googleAccountsMeta: setGoogleAccounts, googleEventLinks: setGoogleEventLinks,
           };
           let projetosCount = 0, marcosCount = 0;
           for (const [name, setter] of Object.entries(collections)) {
@@ -1920,12 +2236,14 @@ function App() {
   const BACKUP_COLLECTIONS = {
     tasks, meetings, decisions, pendencies, risks, changes, diary, notes, reminders, documents, projetos: projects, marcos: milestones,
     empresas, pessoas, listas: listasToArrayDocs(listas), identidadeVisual: [identidadeVisual],
+    googleAccountsMeta: googleAccounts, googleEventLinks,
   };
   const BACKUP_SETTERS = {
     tasks: setTasks, meetings: setMeetings, decisions: setDecisions, pendencies: setPendencies, risks: setRisks, changes: setChanges, diary: setDiary, notes: setNotes, reminders: setReminders, documents: setDocuments, projetos: setProjects, marcos: setMilestones,
     empresas: setEmpresas, pessoas: setPessoas,
     listas: (arr) => { const obj = {}; arr.forEach((doc) => { obj[doc.id] = doc.itens || []; }); setListas((prev) => ({ ...prev, ...obj })); },
     identidadeVisual: (arr) => { if (arr[0]) setIdentidadeVisual(arr[0]); },
+    googleAccountsMeta: setGoogleAccounts, googleEventLinks: setGoogleEventLinks,
   };
 
   /* limpa todos os dados (local + Google Drive), mantendo o mesmo arquivo — usado para reaproveitar
@@ -2351,13 +2669,14 @@ function App() {
   }
 
   /* --------------------- criação manual (via "+ Novo") de reunião, decisão e pendência --------------------- */
-  function addMeetingManual({ titulo, projectId, data, horario, objetivo }) {
+  function addMeetingManual({ titulo, projectId, data, horario, objetivo, googleEvent }) {
     const id = "m" + (Date.now() % 100000) + Math.floor(Math.random() * 99);
     const rec = {
       id, titulo: (titulo || "").trim() || "Reunião sem título", projectId, data: data || TODAY, horario: horario || "",
       participantes: [], objetivo: objetivo || "", anotacoes: "", resumo: "", linkGravacao: "", transcricao: "", anexos: [],
       decisoesIds: [], pendenciasIds: [], tarefasIds: [], riscosIds: [], mudancasIds: [], documentosIds: [],
       aiAnalysis: { status: "not_run" },
+      googleEvent: googleEvent || null, // { accountId, calendarId, eventId } quando a reunião veio de um evento do Google Agenda — usado para evitar reimportar o mesmo evento
     };
     setMeetings((prev) => [rec, ...prev]);
     persistDoc("meetings", id, rec);
@@ -2601,7 +2920,10 @@ function App() {
     addListItem, updateListItem, toggleListItemAtivo, moveListItem, deleteListItem, isListItemInUse,
     updateIdentidadeVisual,
     downloadNoteAsWord, downloadsStatus, downloadBackup, importBackup, limparTudo, dbStatus, driveSaveStatus, persistDocAwaitable, route,
-    authStatus, signInWithGoogle, signOutGoogle, setToast };
+    authStatus, signInWithGoogle, signOutGoogle, setToast,
+    googleAccounts, googleAccountStatus, googleAccountError, googleCalendarsByAccount, googleEvents, googleEventsSyncStatus, googleEventLinks,
+    connectGoogleAccount, reconnectGoogleAccount, disconnectGoogleAccount, removeGoogleAccount, updateGoogleAccountCalendarios,
+    syncGoogleAgenda, linkGoogleEventToProject, importGoogleEventAsMeeting };
 
   if (authStatus !== "logado") {
     return (
@@ -3839,6 +4161,10 @@ function CalendarView({ ctx }) {
     const [y, m] = TODAY.split("-");
     return { year: parseInt(y, 10), month: parseInt(m, 10) - 1 };
   });
+  const [filterFonte, setFilterFonte] = useState("todos"); // todos | central | google
+  const [filterConta, setFilterConta] = useState("todas");
+  const [filterCalendario, setFilterCalendario] = useState("todos");
+  const [filterProjeto, setFilterProjeto] = useState("todos");
 
   const monthLabel = `${MESES_FULL[cursor.month][0].toUpperCase()}${MESES_FULL[cursor.month].slice(1)} de ${cursor.year}`;
   const monthStart = new Date(cursor.year, cursor.month, 1);
@@ -3847,14 +4173,42 @@ function CalendarView({ ctx }) {
 
   function isoFor(day) { return `${cursor.year}-${String(cursor.month + 1).padStart(2, "0")}-${String(day).padStart(2, "0")}`; }
 
+  const eventProjectByKey = useMemo(() => {
+    const map = {};
+    (ctx.googleEventLinks || []).forEach((l) => { map[l.id] = l.projectId; });
+    return map;
+  }, [ctx.googleEventLinks]);
+
+  const calendariosDaContaFiltrada = filterConta !== "todas" ? (ctx.googleCalendarsByAccount[filterConta] || []) : [];
+
   const itemsByDay = useMemo(() => {
     const map = {};
     function push(iso, item) { if (!iso) return; (map[iso] = map[iso] || []).push(item); }
-    ctx.tasks.forEach((t) => { if (t.prazo && t.status !== "Concluído") push(t.prazo, { type: "tarefa", id: t.id, label: t.titulo, kind: "tarefa" }); });
-    ctx.milestones.forEach((m) => { push(m.previsao, { type: "marco", id: m.id, label: m.marco, kind: "marco" }); });
-    ctx.meetings.forEach((m) => { push(m.data, { type: "reuniao", id: m.id, label: m.titulo, kind: "reuniao" }); });
+    if (filterFonte !== "google") {
+      ctx.tasks.forEach((t) => {
+        if (!t.prazo || t.status === "Concluído") return;
+        if (filterProjeto !== "todos" && t.projectId !== filterProjeto) return;
+        push(t.prazo, { type: "tarefa", id: t.id, label: t.titulo, kind: "tarefa" });
+      });
+      ctx.milestones.forEach((m) => {
+        if (filterProjeto !== "todos" && m.projectId !== filterProjeto) return;
+        push(m.previsao, { type: "marco", id: m.id, label: m.marco, kind: "marco" });
+      });
+      ctx.meetings.forEach((m) => {
+        if (filterProjeto !== "todos" && m.projectId !== filterProjeto) return;
+        push(m.data, { type: "reuniao", id: m.id, label: m.titulo, kind: "reuniao" });
+      });
+    }
+    if (filterFonte !== "central") {
+      (ctx.googleEvents || []).forEach((ev) => {
+        if (filterConta !== "todas" && ev.accountId !== filterConta) return;
+        if (filterCalendario !== "todos" && ev.calendarId !== filterCalendario) return;
+        if (filterProjeto !== "todos" && eventProjectByKey[ev.key] !== filterProjeto) return;
+        push(ev.data, { type: "googleEvent", id: ev.key, label: ev.titulo, kind: "google" });
+      });
+    }
     return map;
-  }, [ctx.tasks, ctx.milestones, ctx.meetings]);
+  }, [ctx.tasks, ctx.milestones, ctx.meetings, ctx.googleEvents, eventProjectByKey, filterFonte, filterConta, filterCalendario, filterProjeto]);
 
   const cells = [];
   for (let i = 0; i < firstWeekday; i++) cells.push(null);
@@ -3876,8 +4230,8 @@ function CalendarView({ ctx }) {
 
   return (
     <div>
-      <p className="planning-hint">Tarefas em aberto, marcos e reuniões consolidados por data.</p>
-      <div className="calendar-toolbar">
+      <p className="planning-hint">Tarefas em aberto, marcos, reuniões e eventos do Google Agenda consolidados por data.</p>
+      <div className="calendar-toolbar" style={{ flexWrap: "wrap", rowGap: 10 }}>
         <button className="icon-btn" onClick={() => goMonth(-1)} title="Mês anterior"><Icon name="chevronRight" size={14} style={{ transform: "rotate(180deg)" }} /></button>
         <strong className="calendar-month-label">{monthLabel}</strong>
         <button className="icon-btn" onClick={() => goMonth(1)} title="Próximo mês"><Icon name="chevronRight" size={14} /></button>
@@ -3886,6 +4240,42 @@ function CalendarView({ ctx }) {
           <span><span className="calendar-legend-dot" style={{ background: "var(--info)" }} /> Reunião</span>
           <span><span className="calendar-legend-dot" style={{ background: "var(--accent-strong)" }} /> Tarefa</span>
           <span><span className="calendar-legend-dot" style={{ background: "var(--success)" }} /> Marco</span>
+          <span><span className="calendar-legend-dot" style={{ background: "var(--neutral)" }} /> Google Agenda</span>
+        </div>
+      </div>
+      <div className="field-grid" style={{ margin: "0 0 16px" }}>
+        <div className="field">
+          <span className="k">Fonte</span>
+          <select value={filterFonte} onChange={(e) => setFilterFonte(e.target.value)} style={fieldInputStyle}>
+            <option value="todos">Todas</option>
+            <option value="central">Só Central</option>
+            <option value="google">Só Google Agenda</option>
+          </select>
+        </div>
+        {filterFonte !== "central" && (
+          <div className="field">
+            <span className="k">Conta Google</span>
+            <select value={filterConta} onChange={(e) => { setFilterConta(e.target.value); setFilterCalendario("todos"); }} style={fieldInputStyle}>
+              <option value="todas">Todas</option>
+              {ctx.googleAccounts.filter((a) => a.usaAgenda).map((a) => <option key={a.id} value={a.id}>{a.apelido || a.email}</option>)}
+            </select>
+          </div>
+        )}
+        {filterFonte !== "central" && filterConta !== "todas" && (
+          <div className="field">
+            <span className="k">Calendário</span>
+            <select value={filterCalendario} onChange={(e) => setFilterCalendario(e.target.value)} style={fieldInputStyle}>
+              <option value="todos">Todos</option>
+              {calendariosDaContaFiltrada.map((c) => <option key={c.id} value={c.id}>{c.nome}</option>)}
+            </select>
+          </div>
+        )}
+        <div className="field">
+          <span className="k">Projeto</span>
+          <select value={filterProjeto} onChange={(e) => setFilterProjeto(e.target.value)} style={fieldInputStyle}>
+            <option value="todos">Todos</option>
+            {ctx.projects.map((p) => <option key={p.id} value={p.id}>{p.nome}</option>)}
+          </select>
         </div>
       </div>
       <div className="calendar-grid">
@@ -5073,6 +5463,21 @@ function ConfigListasTab({ ctx }) {
   );
 }
 
+const GOOGLE_ACCOUNT_STATUS_LABEL = {
+  conectando: "Conectando…",
+  conectado: "Conectada",
+  desconectado: "Desconectada",
+  "sessao-expirada": "Sessão expirada — reconecte",
+  erro: "Erro ao conectar",
+};
+const GOOGLE_ACCOUNT_STATUS_TONE = {
+  conectando: "info",
+  conectado: "success",
+  desconectado: "neutral",
+  "sessao-expirada": "warning",
+  erro: "danger",
+};
+
 function ConfigContasGoogleTab({ ctx }) {
   const statusLabel = {
     "nao-configurado": "Google Client ID não configurado nesta cópia do arquivo.",
@@ -5082,26 +5487,161 @@ function ConfigContasGoogleTab({ ctx }) {
     "logado": "Conta conectada — usada para o Google Drive (armazenamento dos dados da Central).",
     "erro": "Erro ao carregar o login do Google.",
   }[ctx.authStatus] || ctx.authStatus;
+  const [showForm, setShowForm] = useState(false);
+  const temContaComAgenda = ctx.googleAccounts.some((a) => a.usaAgenda);
+
   return (
     <div>
       <div className="section-head"><h2>Contas Google</h2></div>
       <div className="card" style={{ padding: 18 }}>
-        <div style={{ fontWeight: 700, fontSize: 13.5, marginBottom: 8 }}>Conta conectada</div>
+        <div style={{ fontWeight: 700, fontSize: 13.5, marginBottom: 8 }}>Conta de dados da Central</div>
         <div className="field-grid" style={{ marginTop: 0, marginBottom: 12 }}>
           <div className="field"><span className="k">Status</span><span className="v">{statusLabel}</span></div>
           <div className="field"><span className="k">Uso</span><span className="v">Google Drive (armazenamento do arquivo de dados da Central)</span></div>
         </div>
         {ctx.authStatus === "logado" && <button className="btn btn-ghost btn-sm" onClick={ctx.signOutGoogle}>Desconectar</button>}
         {(ctx.authStatus === "deslogado" || ctx.authStatus === "erro") && <button className="btn btn-primary btn-sm" onClick={ctx.signInWithGoogle}>Conectar</button>}
-      </div>
-      <div className="card" style={{ padding: 18, marginTop: 16 }}>
-        <div style={{ fontWeight: 700, fontSize: 13.5, marginBottom: 8 }}>Múltiplas contas Google</div>
-        <p className="hint" style={{ margin: 0 }}>
-          Nesta fase, a Central conecta a uma única conta Google, usada para o Google Drive. Conectar várias contas —
-          para escolher, por arquivo, em qual conta e pasta salvar, e para Google Agenda, Google Meet, atas e
-          transcrições — é uma evolução planejada para uma próxima rodada e depende de configuração adicional no
-          Google Cloud (ver GUIA-CONFIGURACAO.md). Nada relacionado a múltiplas contas está simulado nesta versão.
+        <p className="hint" style={{ margin: "10px 0 0" }}>
+          Esta conta guarda os dados da Central (projetos, tarefas, anotações etc). É independente das contas
+          conectadas abaixo — desconectar ou remover uma conta abaixo nunca afeta esta.
         </p>
+      </div>
+
+      <div className="section-head" style={{ marginTop: 24 }}>
+        <h2>Contas Google conectadas</h2>
+        <div style={{ display: "flex", gap: 8 }}>
+          {temContaComAgenda && (
+            <button className="btn btn-ghost btn-sm" onClick={() => ctx.syncGoogleAgenda()} disabled={ctx.googleEventsSyncStatus === "syncing"}>
+              <Icon name="refresh" size={13} /> {ctx.googleEventsSyncStatus === "syncing" ? "Sincronizando…" : "Sincronizar agenda agora"}
+            </button>
+          )}
+          <button className="btn btn-primary btn-sm" onClick={() => setShowForm((v) => !v)}><Icon name="plus" size={13} /> Conectar conta</button>
+        </div>
+      </div>
+      <p className="hint" style={{ margin: "-6px 0 16px" }}>
+        Contas adicionais (pessoal, profissional, outras) usadas para Google Drive e/ou Google Agenda a partir da
+        Central. Os tokens de acesso ficam só na memória desta sessão — nunca são salvos em backup, no Drive ou em
+        qualquer arquivo. Uma falha em uma conta nunca afeta a conta de dados acima nem as outras contas conectadas.
+      </p>
+
+      {showForm && <ConectarContaGoogleForm ctx={ctx} onDone={() => setShowForm(false)} />}
+
+      <div className="list-stack">
+        {ctx.googleAccounts.length === 0 && !showForm && (
+          <EmptyState text='Nenhuma conta adicional conectada. Use "Conectar conta" para ligar o Google Drive e/ou o Google Agenda de outra conta.' />
+        )}
+        {ctx.googleAccounts.map((a) => <GoogleAccountCard key={a.id} account={a} ctx={ctx} />)}
+      </div>
+
+      <div className="card" style={{ padding: 18, marginTop: 16 }}>
+        <div style={{ fontWeight: 700, fontSize: 13.5, marginBottom: 8 }}>O que ainda não está nesta versão</div>
+        <p className="hint" style={{ margin: 0 }}>
+          Escolher conta e pasta por arquivo ao salvar Materiais (Google Picker), Google Meet, atas e transcrições
+          automáticas, upload real de Materiais e exportação em ZIP continuam sendo evoluções planejadas para
+          próximas rodadas — nada disso está implementado nem simulado nesta versão.
+        </p>
+      </div>
+    </div>
+  );
+}
+
+function ConectarContaGoogleForm({ ctx, onDone }) {
+  const [apelido, setApelido] = useState("");
+  const [usaDrive, setUsaDrive] = useState(true);
+  const [usaAgenda, setUsaAgenda] = useState(true);
+
+  function conectar(e) {
+    e.preventDefault();
+    if (!usaDrive && !usaAgenda) { ctx.setToast("Selecione Google Drive e/ou Google Agenda."); return; }
+    ctx.connectGoogleAccount({ apelido, usaDrive, usaAgenda });
+    onDone();
+  }
+
+  return (
+    <form className="card" style={{ padding: 16, marginBottom: 16 }} onSubmit={conectar}>
+      <div className="field-grid" style={{ marginTop: 0, marginBottom: 12 }}>
+        <div className="field">
+          <span className="k">Apelido (opcional)</span>
+          <input type="text" placeholder="Ex.: Pessoal, Trabalho" value={apelido} onChange={(e) => setApelido(e.target.value)} style={fieldInputStyle} autoFocus />
+        </div>
+      </div>
+      <div style={{ display: "flex", gap: 20, marginBottom: 14, flexWrap: "wrap" }}>
+        <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12.5 }}>
+          <input type="checkbox" checked={usaDrive} onChange={(e) => setUsaDrive(e.target.checked)} /> Usar para Google Drive
+        </label>
+        <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12.5 }}>
+          <input type="checkbox" checked={usaAgenda} onChange={(e) => setUsaAgenda(e.target.checked)} /> Usar para Google Agenda
+        </label>
+      </div>
+      <p className="hint" style={{ margin: "0 0 12px" }}>
+        O Google vai abrir uma janela para escolher a conta e confirmar o acesso. Enquanto este aplicativo estiver em
+        modo de teste no Google Cloud, só contas cadastradas como usuário de teste conseguem conectar — ver
+        GUIA-CONFIGURACAO.md.
+      </p>
+      <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
+        <button type="button" className="btn btn-ghost btn-sm" onClick={onDone}>Cancelar</button>
+        <button type="submit" className="btn btn-primary btn-sm">Conectar com Google</button>
+      </div>
+    </form>
+  );
+}
+
+function GoogleAccountCard({ account, ctx }) {
+  const status = ctx.googleAccountStatus[account.id] || "desconectado";
+  const error = ctx.googleAccountError[account.id];
+  const calendarios = ctx.googleCalendarsByAccount[account.id] || [];
+  const selecionados = account.calendariosSelecionados || ["primary"];
+  const [confirmRemove, setConfirmRemove] = useState(false);
+
+  function toggleCalendario(calId) {
+    const next = selecionados.indexOf(calId) === -1 ? [...selecionados, calId] : selecionados.filter((c) => c !== calId);
+    ctx.updateGoogleAccountCalendarios(account.id, next.length ? next : ["primary"]);
+  }
+
+  return (
+    <div className="card" style={{ padding: 16 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12, flexWrap: "wrap" }}>
+        <div>
+          <div style={{ fontWeight: 700, fontSize: 13.5 }}>{account.apelido || account.email}</div>
+          {account.apelido && <div className="hint" style={{ margin: "2px 0 0" }}>{account.email}</div>}
+        </div>
+        <Pill tone={GOOGLE_ACCOUNT_STATUS_TONE[status] || "neutral"}>{GOOGLE_ACCOUNT_STATUS_LABEL[status] || status}</Pill>
+      </div>
+      <div className="field-grid" style={{ marginTop: 12, marginBottom: 12 }}>
+        <div className="field"><span className="k">Serviços</span><span className="v">{[account.usaDrive && "Google Drive", account.usaAgenda && "Google Agenda"].filter(Boolean).join(" · ") || "—"}</span></div>
+        <div className="field"><span className="k">Última sincronização da agenda</span><span className="v">{account.usaAgenda ? fmtDateTime(account.ultimaSincronizacao) : "—"}</span></div>
+      </div>
+      {error && <div className="stale-alert" style={{ marginBottom: 12 }}><Icon name="alert" size={12} /> {error}</div>}
+
+      {account.usaAgenda && status === "conectado" && (
+        <div style={{ marginBottom: 12 }}>
+          <div className="k" style={{ marginBottom: 6 }}>Calendários exibidos na Central</div>
+          {calendarios.length === 0 && <p className="hint" style={{ margin: "0 0 6px" }}>Carregando calendários…</p>}
+          <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+            {calendarios.map((c) => (
+              <label key={c.id} style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12.5 }}>
+                <input type="checkbox" checked={selecionados.indexOf(c.id) !== -1} onChange={() => toggleCalendario(c.id)} />
+                {c.nome}{c.principal ? " (principal)" : ""}
+              </label>
+            ))}
+          </div>
+        </div>
+      )}
+
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+        {status === "conectado" && <button className="btn btn-ghost btn-sm" onClick={() => ctx.disconnectGoogleAccount(account.id)}>Desconectar</button>}
+        {status !== "conectado" && status !== "conectando" && <button className="btn btn-primary btn-sm" onClick={() => ctx.reconnectGoogleAccount(account.id)}>Reconectar</button>}
+        {account.usaAgenda && status === "conectado" && calendarios.length > 0 && (
+          <button className="btn btn-ghost btn-sm" onClick={() => ctx.syncGoogleAgenda([account])}>Sincronizar esta conta</button>
+        )}
+        {!confirmRemove && <button className="btn btn-ghost btn-sm" onClick={() => setConfirmRemove(true)}><Icon name="trash" size={13} /> Remover</button>}
+        {confirmRemove && (
+          <React.Fragment>
+            <span className="hint">Remover esta conta da Central?</span>
+            <button className="btn btn-ghost btn-sm" onClick={() => setConfirmRemove(false)}>Cancelar</button>
+            <button className="btn btn-primary btn-sm" onClick={() => ctx.removeGoogleAccount(account.id)}>Confirmar remoção</button>
+          </React.Fragment>
+        )}
       </div>
     </div>
   );
@@ -5209,6 +5749,15 @@ function ConfigIdentidadeVisualTab({ ctx }) {
    ================================================================================== */
 function ItemDrawer({ item, onClose, ctx }) {
   if (item.type === "reuniao") return <MeetingDrawer id={item.id} onClose={onClose} ctx={ctx} />;
+  if (item.type === "googleEvent") {
+    return (
+      <div className="overlay" onClick={onClose}>
+        <div className="drawer" onClick={(e) => e.stopPropagation()}>
+          <GoogleEventDrawerContent eventKey={item.id} onClose={onClose} ctx={ctx} />
+        </div>
+      </div>
+    );
+  }
   return (
     <div className="overlay" onClick={onClose}>
       <div className="drawer" onClick={(e) => e.stopPropagation()}>
@@ -5250,6 +5799,87 @@ function GenericDrawerContent({ type, id, onClose, ctx }) {
 }
 function recTitle(type, rec) {
   return { tarefa: rec.titulo, decisao: rec.decisao, pendencia: rec.pendencia, risco: rec.descricao, mudanca: rec.novaDefinicao, documento: rec.nome, marco: rec.marco, reuniao: rec.titulo, nota: rec.titulo }[type];
+}
+
+/* drawer de um evento do Google Agenda (fora do sistema de goToRecord/GenericDrawerContent, de propósito —
+   evento do Google não é um registro da Central, é uma leitura ao vivo da agenda conectada) */
+function GoogleEventDrawerContent({ eventKey, onClose, ctx }) {
+  const ev = (ctx.googleEvents || []).find((e) => e.key === eventKey);
+  const linkedProjectId = ((ctx.googleEventLinks || []).find((l) => l.id === eventKey) || {}).projectId || "";
+  const [selectedProject, setSelectedProject] = useState(linkedProjectId);
+  useEffect(() => { setSelectedProject(linkedProjectId); }, [linkedProjectId]);
+
+  if (!ev) return <div className="drawer-body"><EmptyState text="Evento não encontrado — pode ter sido removido do Google Agenda ou a agenda ainda não foi sincronizada nesta sessão." /></div>;
+
+  const conta = ctx.googleAccounts.find((a) => a.id === ev.accountId);
+  const calendario = (ctx.googleCalendarsByAccount[ev.accountId] || []).find((c) => c.id === ev.calendarId);
+  const project = linkedProjectId ? projectById(linkedProjectId) : null;
+
+  function vincular(e) {
+    e.preventDefault();
+    ctx.linkGoogleEventToProject(ev.key, selectedProject || null);
+    ctx.setToast(selectedProject ? "Evento vinculado ao projeto." : "Vínculo com projeto removido.");
+  }
+
+  return (
+    <>
+      <div className="drawer-header">
+        <div>
+          <div style={{ fontSize: 11, textTransform: "uppercase", letterSpacing: ".04em", color: "var(--text-muted)", fontWeight: 700, marginBottom: 6 }}>Evento do Google Agenda</div>
+          <h2>{ev.titulo}</h2>
+          {project && <a onClick={() => { onClose(); ctx.openProject(project.id); }} style={{ cursor: "pointer" }}>{project.nome}</a>}
+        </div>
+        <button className="drawer-close" onClick={onClose}><Icon name="x" /></button>
+      </div>
+      <div className="drawer-body">
+        <div className="field-grid" style={{ marginTop: 0 }}>
+          <div className="field"><span className="k">Data</span><span className="v">{fmtDateLong(ev.data)}</span></div>
+          <div className="field"><span className="k">Horário</span><span className="v">{ev.diaInteiro ? "Dia inteiro" : (ev.horario || "—")}</span></div>
+          <div className="field"><span className="k">Conta</span><span className="v">{conta ? (conta.apelido || conta.email) : "—"}</span></div>
+          <div className="field"><span className="k">Calendário</span><span className="v">{calendario ? calendario.nome : ev.calendarId}</span></div>
+          <div className="field"><span className="k">Organizador</span><span className="v">{ev.organizador || "—"}</span></div>
+          <div className="field"><span className="k">Local</span><span className="v">{ev.local || "—"}</span></div>
+        </div>
+        {ev.participantes && ev.participantes.length > 0 && (
+          <div className="field-block" style={{ margin: "0 0 12px" }}>
+            <span className="k">Participantes</span>
+            <span className="v">{ev.participantes.join(", ")}</span>
+          </div>
+        )}
+        {ev.descricao && (
+          <div className="field-block" style={{ margin: "0 0 12px" }}>
+            <span className="k">Descrição</span>
+            <span className="v" style={{ whiteSpace: "pre-wrap" }}>{ev.descricao}</span>
+          </div>
+        )}
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 16 }}>
+          {ev.htmlLink && <a className="btn btn-ghost btn-sm" href={ev.htmlLink} target="_blank" rel="noreferrer"><Icon name="external" size={13} /> Abrir no Google Agenda</a>}
+          {ev.meetLink && <a className="btn btn-ghost btn-sm" href={ev.meetLink} target="_blank" rel="noreferrer"><Icon name="external" size={13} /> Abrir no Google Meet</a>}
+        </div>
+
+        <form onSubmit={vincular} className="card" style={{ padding: 14, marginBottom: 12 }}>
+          <div className="field" style={{ marginBottom: 10 }}>
+            <span className="k">Projeto relacionado</span>
+            <select value={selectedProject} onChange={(e) => setSelectedProject(e.target.value)} style={fieldInputStyle}>
+              <option value="">Nenhum</option>
+              {ctx.projects.map((p) => <option key={p.id} value={p.id}>{p.nome}</option>)}
+            </select>
+          </div>
+          <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", flexWrap: "wrap" }}>
+            <button type="submit" className="btn btn-ghost btn-sm">Vincular a projeto</button>
+            <button type="button" className="btn btn-primary btn-sm" disabled={!selectedProject}
+              onClick={() => ctx.importGoogleEventAsMeeting(ev, selectedProject)}>
+              Importar como reunião
+            </button>
+          </div>
+        </form>
+        <p className="hint" style={{ margin: 0 }}>
+          Importar cria uma reunião na Central vinculada ao projeto escolhido, usando título, data e horário deste
+          evento. Importar o mesmo evento de novo não duplica a reunião.
+        </p>
+      </div>
+    </>
+  );
 }
 
 function OriginLine({ origem, ctx, onClose }) {
@@ -5517,7 +6147,9 @@ function MeetingDrawer({ id, onClose, ctx }) {
       <div className="drawer" onClick={(e) => e.stopPropagation()}>
         <div className="drawer-header">
           <div>
-            <div style={{ fontSize: 11, textTransform: "uppercase", letterSpacing: ".04em", color: "var(--text-muted)", fontWeight: 700, marginBottom: 6 }}>Reunião</div>
+            <div style={{ fontSize: 11, textTransform: "uppercase", letterSpacing: ".04em", color: "var(--text-muted)", fontWeight: 700, marginBottom: 6 }}>
+              Reunião {m.googleEvent && <Pill tone="neutral">Importada do Google Agenda</Pill>}
+            </div>
             <h2>{m.titulo}</h2>
             {project && <a onClick={() => { onClose(); ctx.openProject(project.id); }} style={{ cursor: "pointer" }}>{project.nome}</a>}
           </div>
@@ -6458,6 +7090,22 @@ function QuickListRow({ item, ctx, onClose }) {
         </div>
         <div className="item-row-side">
           <Pill tone={projectTone(p.status)} dot>{p.status}</Pill>
+        </div>
+      </div>
+    );
+  }
+  if (item.type === "googleEvent") {
+    const ev = (ctx.googleEvents || []).find((e) => e.key === item.id);
+    if (!ev) return null;
+    const conta = ctx.googleAccounts.find((a) => a.id === ev.accountId);
+    return (
+      <div className="item-row" onClick={() => { onClose(); ctx.goToRecord(item.type, item.id); }}>
+        <div className="item-row-main">
+          <span className="item-row-title">{ev.titulo}</span>
+          <span className="item-row-sub">{conta ? (conta.apelido || conta.email) : "Google Agenda"}</span>
+        </div>
+        <div className="item-row-side">
+          <span className="item-row-date mono">{ev.diaInteiro ? "Dia inteiro" : (ev.horario || "—")}</span>
         </div>
       </div>
     );
