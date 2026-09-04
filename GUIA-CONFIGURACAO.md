@@ -112,13 +112,12 @@ Esta rodada conecta contas Google adicionais para Google Drive e Google Agenda, 
 
 ## Novidades desta rodada (Fase 3)
 
-- **Documentos** (antes "Materiais"): mesma aba, agora com um botão "Selecionar do Google Drive" que abre o Google Picker (ver Parte 9) para escolher um arquivo do Drive de qualquer conta conectada — o nome e o link entram automaticamente, sem digitar nada.
-- **Pasta do projeto no Drive**: em Visão Geral, cada projeto pode ter uma pasta do Drive associada (escolhida pelo mesmo Picker) — um clique abre a pasta, e o Picker de Documentos já começa navegando a partir dela quando a mesma conta é escolhida.
+- **Documentos** (antes "Materiais"): botão único "Adicionar documento" que abre três formas de trazer um documento — **Link** (colar um link qualquer, como antes), **Upload da máquina** (envia o arquivo de verdade para o Google Drive da conta escolhida, limite de 10MB) e **Google Drive** (Picker, ver Parte 9, para escolher um arquivo já existente no Drive de qualquer conta conectada). Nos três casos a Central guarda só o link resultante, nunca o arquivo em si.
+- **Pasta do projeto no Drive**: em Visão Geral, cada projeto pode ter uma pasta do Drive associada (escolhida pelo Picker) — um clique abre a pasta, e o Picker de Documentos já começa navegando a partir dela quando a mesma conta é escolhida.
 - **Decisões, Pendências, Riscos e Mudanças** deixaram de ser abas próprias do projeto — agora aparecem como categorias dentro da própria Visão Geral, junto com o resumo do projeto e o cronograma.
 - **Diário** passou a ser a última aba do projeto.
 - **Prioridade de Tarefas e Projetos**: passou de lista de texto (Alta/Média/Baixa) para uma escala numérica fixa P0–P3 (P0 = crítica/pra ontem, P3 = sem prioridade), com uma cor por nível.
-- **Tarefas**: agora têm edição completa, exclusão, comentários (com opção de colar prints via Ctrl+V) e anexos próprios da tarefa, além de filtro por status e datas de criação/última mudança de status/conclusão visíveis no detalhe.
-- **Login do Google**: a reconexão agora tenta primeiro um modo silencioso (sem tela de escolha de conta nem de permissões) antes de pedir a tela cheia — ainda é preciso um clique por carregamento de página, mas normalmente sem a tela pesada do Google no meio.
+- **Tarefas**: agora têm edição completa, exclusão, comentários (com opção de colar prints via Ctrl+V) e anexos próprios da tarefa, além de filtro por status, cards de contagem por status em Minha Central, e datas de criação/última mudança de status/conclusão visíveis no detalhe.
 
 ## Limitações
 
@@ -126,4 +125,4 @@ O login expira periodicamente; ao acontecer, a aplicação mostra "Sessão Googl
 
 **Limitações específicas desta rodada (Fase 2):** as contas Google adicionais (Drive e/ou Agenda) precisam ser reconectadas a cada nova sessão no navegador — os tokens não são persistidos, de propósito, por segurança (ver Parte 8).
 
-**Limitações específicas desta rodada (Fase 3):** Google Meet, atas e transcrições automáticas a partir de reuniões do Google Agenda, upload real de arquivo (fora do Picker) e exportação em ZIP continuam sendo evoluções planejadas para próximas rodadas e **não estão implementadas nem simuladas** nesta versão. O Picker de Documentos exige a chave de API da Parte 9 configurada — sem ela, o botão "Selecionar do Google Drive" mostra um aviso em vez do seletor. A importação de Word não salva o arquivo `.docx` original — apenas o conteúdo convertido.
+**Limitações específicas desta rodada (Fase 3):** Google Meet, atas e transcrições automáticas a partir de reuniões do Google Agenda e exportação em ZIP continuam sendo evoluções planejadas para próximas rodadas e **não estão implementadas nem simuladas** nesta versão. O upload da máquina em Documentos tem limite de 10MB (upload simples) — arquivos maiores devem ser enviados pelo Google Drive Web e trazidos depois pela opção "Google Drive". O Picker de Documentos exige a chave de API da Parte 9 configurada — sem ela, as opções "Google Drive" e "Pasta no Drive" mostram um aviso em vez do seletor. A importação de Word não salva o arquivo `.docx` original — apenas o conteúdo convertido.
