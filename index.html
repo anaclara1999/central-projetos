@@ -1754,7 +1754,6 @@ function App() {
     if (startFolderId) view.setParent(startFolderId);
     const picker = new window.google.picker.PickerBuilder()
       .addView(view)
-      .enableFeature(window.google.picker.Feature.NAV_HIDDEN, false)
       .setOAuthToken(token)
       .setDeveloperKey(GOOGLE_PICKER_API_KEY)
       .setCallback((data) => {
