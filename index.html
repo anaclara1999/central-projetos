@@ -1758,30 +1758,20 @@ function App() {
     picker.setVisible(true);
   }
 
-  /* A tentativa silenciosa (prompt "") só é feita aqui, dentro do clique em "Entrar com Google" —
-     nunca automaticamente ao carregar a página. O Google recomenda explicitamente nunca chamar
-     requestAccessToken() fora de uma interação direta do usuário: fora de um clique, o pedido pode
-     ficar "preso" sem completar (o navegador não bloqueia visivelmente, mas o Google também não
-     finaliza o fluxo), o que na prática exigia repetir o login duas vezes. Com o clique real, o modo
-     silencioso primeiro resolve na hora (sem tela de escolha de conta) quando já há consentimento
-     válido; só recorre à tela cheia se isso falhar (primeiro uso, ou consentimento revogado). */
+  /* Um único pedido, direto para a tela de permissões (prompt "consent"). Testamos tentar primeiro
+     o modo silencioso (prompt "") antes desta chamada — na prática, o Google mostrou a tela de
+     escolher conta mesmo assim, sem completar o login sozinho, e só então caía para esta mesma tela
+     de permissões — ou seja, duas janelas em vez de uma. Pedir "consent" diretamente é o que
+     efetivamente dá um único popup contínuo (escolher conta + permissões, sem fechar e reabrir). */
   function signInWithGoogle() {
     if (!tokenClientRef.current) return;
     setAuthStatus("entrando");
     tokenClientRef.current.callback = (resp) => {
-      if (resp.error) {
-        tokenClientRef.current.callback = (resp2) => {
-          if (resp2.error) { setAuthStatus("erro"); return; }
-          accessTokenRef.current = resp2.access_token;
-          setAuthStatus("logado");
-        };
-        tokenClientRef.current.requestAccessToken({ prompt: "consent" });
-        return;
-      }
+      if (resp.error) { setAuthStatus("erro"); return; }
       accessTokenRef.current = resp.access_token;
       setAuthStatus("logado");
     };
-    tokenClientRef.current.requestAccessToken({ prompt: "" });
+    tokenClientRef.current.requestAccessToken({ prompt: "consent" });
   }
 
   function signOutGoogle() {
