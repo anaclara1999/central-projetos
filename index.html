@@ -1121,18 +1121,18 @@ const MESES_ABBR = ["jan","fev","mar","abr","mai","jun","jul","ago","set","out",
 const MESES_FULL = ["janeiro","fevereiro","março","abril","maio","junho","julho","agosto","setembro","outubro","novembro","dezembro"];
 const DIAS_SEMANA = ["domingo","segunda-feira","terça-feira","quarta-feira","quinta-feira","sexta-feira","sábado"];
 
+/* Decisões, Pendências, Riscos e Mudanças deixaram de ser abas próprias — agora aparecem como
+   categorias dentro da própria Visão Geral (ver VisaoGeralTab), junto com os componentes que
+   renderizam cada lista (DecisoesTab, PendenciasTab, RiscosTab, MudancasTab, mantidos como estão
+   e só reaproveitados de outro lugar). */
 const TABS = [
   { key: "visao", label: "Visão Geral" },
-  { key: "diario", label: "Diário" },
   { key: "tarefas", label: "Tarefas" },
   { key: "reunioes", label: "Reuniões" },
   { key: "notas", label: "Notas" },
-  { key: "decisoes", label: "Decisões" },
-  { key: "pendencias", label: "Pendências" },
   { key: "materiais", label: "Materiais" },
   { key: "cronograma", label: "Cronograma" },
-  { key: "riscos", label: "Riscos" },
-  { key: "mudancas", label: "Mudanças" },
+  { key: "diario", label: "Diário" },
 ];
 
 const DIARY_TYPE_LABEL = {
@@ -3765,12 +3765,8 @@ function ProjectView({ route, ctx, navigate }) {
     tarefas: ctx.tasks.filter((t) => t.projectId === project.id && t.status !== "Concluído").length,
     reunioes: ctx.meetings.filter((m) => m.projectId === project.id).length,
     notas: ctx.notes.filter((n) => n.projectId === project.id).length,
-    decisoes: ctx.decisions.filter((d) => d.projectId === project.id).length,
-    pendencias: ctx.pendencies.filter((p) => p.projectId === project.id && p.status !== "Resolvida").length,
     materiais: ctx.documents.filter((d) => d.projectId === project.id).length,
     cronograma: ctx.milestones.filter((m) => m.projectId === project.id).length,
-    riscos: ctx.risks.filter((r) => r.projectId === project.id && r.status !== "Resolvido").length,
-    mudancas: ctx.changes.filter((c) => c.projectId === project.id).length,
   };
   const stale = isStale(project, ctx);
 
@@ -3818,11 +3814,11 @@ function ProjectView({ route, ctx, navigate }) {
       </div>
 
       <div className="attention-row">
-        <AttentionTile label="Pendências abertas" n={stats.pendAbertas} onClick={() => setTab("pendencias")} />
-        <AttentionTile label="Pendências atrasadas" n={stats.pendAtrasadas} tone={stats.pendAtrasadas > 0 ? "danger" : null} onClick={() => setTab("pendencias")} />
+        <AttentionTile label="Pendências abertas" n={stats.pendAbertas} onClick={() => setTab("visao")} />
+        <AttentionTile label="Pendências atrasadas" n={stats.pendAtrasadas} tone={stats.pendAtrasadas > 0 ? "danger" : null} onClick={() => setTab("visao")} />
         <AttentionTile label="Minhas tarefas" n={stats.minhasTarefas} onClick={() => setTab("tarefas")} />
-        <AttentionTile label="Riscos ativos" n={stats.riscosAtivos} tone={stats.riscosAtivos > 0 ? "warning" : null} onClick={() => setTab("riscos")} />
-        <AttentionTile label="Decisões pendentes" n={stats.decisoesPendentes} onClick={() => setTab("decisoes")} />
+        <AttentionTile label="Riscos ativos" n={stats.riscosAtivos} tone={stats.riscosAtivos > 0 ? "warning" : null} onClick={() => setTab("visao")} />
+        <AttentionTile label="Decisões pendentes" n={stats.decisoesPendentes} onClick={() => setTab("visao")} />
         <AttentionTile label="Próximo marco" n={proximoMarco ? daysUntil(proximoMarco.previsao) + "d" : "—"} onClick={() => setTab("cronograma")} isText />
       </div>
 
@@ -3836,16 +3832,12 @@ function ProjectView({ route, ctx, navigate }) {
       </div>
 
       {tab === "visao" && <VisaoGeralTab project={project} ctx={ctx} setTab={setTab} />}
-      {tab === "diario" && <DiarioTab project={project} ctx={ctx} />}
       {tab === "tarefas" && <TarefasTab project={project} ctx={ctx} />}
       {tab === "reunioes" && <ReunioesTab project={project} ctx={ctx} />}
       {tab === "notas" && <NotasTab project={project} ctx={ctx} setTab={setTab} />}
-      {tab === "decisoes" && <DecisoesTab project={project} ctx={ctx} />}
-      {tab === "pendencias" && <PendenciasTab project={project} ctx={ctx} />}
       {tab === "materiais" && <MateriaisTab project={project} ctx={ctx} />}
       {tab === "cronograma" && <CronogramaTab project={project} ctx={ctx} />}
-      {tab === "riscos" && <RiscosTab project={project} ctx={ctx} />}
-      {tab === "mudancas" && <MudancasTab project={project} ctx={ctx} />}
+      {tab === "diario" && <DiarioTab project={project} ctx={ctx} />}
     </div>
   );
 }
@@ -3862,83 +3854,80 @@ function AttentionTile({ label, n, tone, onClick, isText }) {
 /* -------------------------------- VISÃO GERAL -------------------------------- */
 function VisaoGeralTab({ project, ctx, setTab }) {
   const diaryItems = ctx.diary.filter((d) => d.projectId === project.id).sort((a, b) => (a.data + a.hora < b.data + b.hora ? 1 : -1)).slice(0, 5);
-  const riscosAtivos = ctx.risks.filter((r) => r.projectId === project.id && r.status !== "Resolvido").slice(0, 4);
   const marcos = ctx.milestones.filter((m) => m.projectId === project.id).sort((a, b) => a.previsao < b.previsao ? -1 : 1);
-  const pendAbertas = ctx.pendencies.filter((p) => p.projectId === project.id && p.status !== "Resolvida").slice(0, 4);
   const dependeDe = (project.dependeDeIds || []).map((id) => projectById(id)).filter(Boolean);
   const dependenciaPara = ctx.projects.filter((p) => (p.dependeDeIds || []).includes(project.id));
 
   return (
-    <div style={{ display: "grid", gridTemplateColumns: "1.3fr 1fr", gap: 20 }}>
-      <div>
-        <div className="section-head"><h2>Sobre o projeto</h2></div>
-        <div className="card" style={{ padding: 16, marginBottom: 22 }}>
-          <p style={{ fontSize: 13, color: "var(--text-secondary)", lineHeight: 1.6 }}>{project.descricao}</p>
-          {project.observacoes && (
-            <div className="field-block" style={{ margin: "12px 0 0" }}>
-              <span className="k">Observações</span>
-              <span className="v">{project.observacoes}</span>
-            </div>
-          )}
-        </div>
-
-        {(dependeDe.length > 0 || dependenciaPara.length > 0) && (
-          <>
-            <div className="section-head"><h2>Dependências</h2></div>
-            <div className="card" style={{ padding: 16, marginBottom: 22 }}>
-              {dependeDe.length > 0 && (
-                <div className="field-block" style={{ margin: "0 0 12px" }}>
-                  <span className="k">Depende de</span>
-                  <div className="subrecord-chip-list">{dependeDe.map((p) => <span key={p.id} className="subrecord-chip" onClick={() => ctx.openProject(p.id)}><Icon name="layers" size={12} /> {p.nome}</span>)}</div>
-                </div>
-              )}
-              {dependenciaPara.length > 0 && (
-                <div className="field-block" style={{ margin: 0 }}>
-                  <span className="k">É dependência para</span>
-                  <div className="subrecord-chip-list">{dependenciaPara.map((p) => <span key={p.id} className="subrecord-chip" onClick={() => ctx.openProject(p.id)}><Icon name="layers" size={12} /> {p.nome}</span>)}</div>
-                </div>
-              )}
-            </div>
-          </>
-        )}
-
-        <div className="section-head"><h2>Últimos acontecimentos</h2><button className="btn btn-ghost btn-sm" onClick={() => setTab("diario")}>Ver diário completo</button></div>
-        <div className="card" style={{ padding: "6px 16px", marginBottom: 22 }}>
-          {diaryItems.length === 0 && <EmptyState text="Nenhum registro no diário ainda." />}
-          <div className="feed-list">
-            {diaryItems.map((d) => (
-              <div className="feed-item" key={d.id} onClick={() => d.relacionado && ctx.goToRecord(d.relacionado.tipo, d.relacionado.id)}>
-                <FeedIcon tipo={d.tipo} />
-                <div className="feed-body">
-                  <span className="feed-time">{relLabel(d.data, d.hora)}</span>
-                  <span className="feed-title">{d.titulo}</span>
-                  <span className="feed-desc">{d.descricao}</span>
-                </div>
+    <div>
+      <div style={{ display: "grid", gridTemplateColumns: "1.3fr 1fr", gap: 20 }}>
+        <div>
+          <div className="section-head"><h2>Sobre o projeto</h2></div>
+          <div className="card" style={{ padding: 16, marginBottom: 22 }}>
+            <p style={{ fontSize: 13, color: "var(--text-secondary)", lineHeight: 1.6 }}>{project.descricao}</p>
+            {project.observacoes && (
+              <div className="field-block" style={{ margin: "12px 0 0" }}>
+                <span className="k">Observações</span>
+                <span className="v">{project.observacoes}</span>
               </div>
-            ))}
+            )}
+          </div>
+
+          {(dependeDe.length > 0 || dependenciaPara.length > 0) && (
+            <>
+              <div className="section-head"><h2>Dependências</h2></div>
+              <div className="card" style={{ padding: 16, marginBottom: 22 }}>
+                {dependeDe.length > 0 && (
+                  <div className="field-block" style={{ margin: "0 0 12px" }}>
+                    <span className="k">Depende de</span>
+                    <div className="subrecord-chip-list">{dependeDe.map((p) => <span key={p.id} className="subrecord-chip" onClick={() => ctx.openProject(p.id)}><Icon name="layers" size={12} /> {p.nome}</span>)}</div>
+                  </div>
+                )}
+                {dependenciaPara.length > 0 && (
+                  <div className="field-block" style={{ margin: 0 }}>
+                    <span className="k">É dependência para</span>
+                    <div className="subrecord-chip-list">{dependenciaPara.map((p) => <span key={p.id} className="subrecord-chip" onClick={() => ctx.openProject(p.id)}><Icon name="layers" size={12} /> {p.nome}</span>)}</div>
+                  </div>
+                )}
+              </div>
+            </>
+          )}
+
+          <div className="section-head"><h2>Últimos acontecimentos</h2><button className="btn btn-ghost btn-sm" onClick={() => setTab("diario")}>Ver diário completo</button></div>
+          <div className="card" style={{ padding: "6px 16px", marginBottom: 22 }}>
+            {diaryItems.length === 0 && <EmptyState text="Nenhum registro no diário ainda." />}
+            <div className="feed-list">
+              {diaryItems.map((d) => (
+                <div className="feed-item" key={d.id} onClick={() => d.relacionado && ctx.goToRecord(d.relacionado.tipo, d.relacionado.id)}>
+                  <FeedIcon tipo={d.tipo} />
+                  <div className="feed-body">
+                    <span className="feed-time">{relLabel(d.data, d.hora)}</span>
+                    <span className="feed-title">{d.titulo}</span>
+                    <span className="feed-desc">{d.descricao}</span>
+                  </div>
+                </div>
+              ))}
+            </div>
           </div>
         </div>
 
-        <div className="section-head"><h2>Pendências em aberto</h2><button className="btn btn-ghost btn-sm" onClick={() => setTab("pendencias")}>Ver todas</button></div>
-        <div className="list-stack">
-          {pendAbertas.length === 0 && <EmptyState text="Nenhuma pendência em aberto." />}
-          {pendAbertas.map((p) => <PendencyRow key={p.id} p={p} onOpen={() => ctx.openDrawer("pendencia", p.id)} />)}
+        <div>
+          <div className="section-head"><h2>Cronograma</h2><button className="btn btn-ghost btn-sm" onClick={() => setTab("cronograma")}>Ver tudo</button></div>
+          <div className="card" style={{ padding: "6px 16px", marginBottom: 22 }}>
+            <div className="milestone-track">
+              {marcos.slice(0, 5).map((m, i) => <MilestoneRow key={m.id} m={m} isLast={i === Math.min(4, marcos.length - 1)} onOpen={() => ctx.openDrawer("marco", m.id)} />)}
+            </div>
+          </div>
         </div>
       </div>
 
-      <div>
-        <div className="section-head"><h2>Cronograma</h2><button className="btn btn-ghost btn-sm" onClick={() => setTab("cronograma")}>Ver tudo</button></div>
-        <div className="card" style={{ padding: "6px 16px", marginBottom: 22 }}>
-          <div className="milestone-track">
-            {marcos.slice(0, 5).map((m, i) => <MilestoneRow key={m.id} m={m} isLast={i === Math.min(4, marcos.length - 1)} onOpen={() => ctx.openDrawer("marco", m.id)} />)}
-          </div>
-        </div>
-
-        <div className="section-head"><h2>Riscos e impedimentos ativos</h2><button className="btn btn-ghost btn-sm" onClick={() => setTab("riscos")}>Ver todos</button></div>
-        <div className="list-stack">
-          {riscosAtivos.length === 0 && <EmptyState text="Nenhum risco ativo no momento." />}
-          {riscosAtivos.map((r) => <RiskRow key={r.id} r={r} onOpen={() => ctx.openDrawer("risco", r.id)} />)}
-        </div>
+      {/* Decisões, Pendências, Riscos e Mudanças: categorias dentro da Visão Geral, não abas
+          próprias — cada bloco reaproveita o mesmo componente que antes vivia numa aba dedicada. */}
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 20, marginTop: 8, paddingTop: 22, borderTop: "1px solid var(--border)" }}>
+        <DecisoesTab project={project} ctx={ctx} />
+        <PendenciasTab project={project} ctx={ctx} />
+        <RiscosTab project={project} ctx={ctx} />
+        <MudancasTab project={project} ctx={ctx} />
       </div>
     </div>
   );
