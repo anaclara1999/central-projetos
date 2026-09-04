@@ -1784,25 +1784,19 @@ function App() {
     }
   }
 
+  /* Vai direto para a tela cheia de permissões — não tenta de novo o modo silencioso aqui, porque
+     a tentativa automática ao carregar a página (attemptSilentSignIn) já tentou e falhou antes de
+     este botão sequer aparecer; tentar de novo só duplicava o pedido de login (via de regra falhando
+     do mesmo jeito) antes de mostrar a tela real, dando a impressão de "logar duas vezes". */
   function signInWithGoogle() {
     if (!tokenClientRef.current) return;
     setAuthStatus("entrando");
     tokenClientRef.current.callback = (resp) => {
-      if (resp.error) {
-        // tentativa silenciosa não resolveu (ex.: primeiro uso, ou consentimento revogado) —
-        // agora sim pede a tela completa de escolha de conta e permissões
-        tokenClientRef.current.callback = (resp2) => {
-          if (resp2.error) { setAuthStatus("erro"); return; }
-          accessTokenRef.current = resp2.access_token;
-          setAuthStatus("logado");
-        };
-        tokenClientRef.current.requestAccessToken({ prompt: "consent" });
-        return;
-      }
+      if (resp.error) { setAuthStatus("erro"); return; }
       accessTokenRef.current = resp.access_token;
       setAuthStatus("logado");
     };
-    tokenClientRef.current.requestAccessToken({ prompt: "" });
+    tokenClientRef.current.requestAccessToken({ prompt: "consent" });
   }
 
   function signOutGoogle() {
