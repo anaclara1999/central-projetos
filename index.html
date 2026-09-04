@@ -1742,12 +1742,19 @@ function App() {
       setToast("Essa conta não está conectada nesta sessão — reconecte em Configurações > Contas Google.");
       return;
     }
-    const view = mode === "folder"
-      ? new window.google.picker.DocsView(window.google.picker.ViewId.FOLDERS).setSelectFolderEnabled(true).setIncludeFolders(true)
-      : new window.google.picker.DocsView(window.google.picker.ViewId.DOCS).setIncludeFolders(true).setSelectFolderEnabled(false);
+    /* ViewId.DOCS (em vez de ViewId.FOLDERS) é o que dá a navegação completa e já conhecida do
+       Drive — Meu Drive, Compartilhados comigo, Drives compartilhados, Recentes — em vez de uma
+       lista única com todas as pastas misturadas. setEnableDrives inclui Drives compartilhados
+       nessa navegação; setSelectFolderEnabled só liga quando o objetivo é escolher uma pasta (senão
+       clicar numa pasta apenas entra nela, como de costume). */
+    const view = new window.google.picker.DocsView(window.google.picker.ViewId.DOCS)
+      .setIncludeFolders(true)
+      .setSelectFolderEnabled(mode === "folder")
+      .setEnableDrives(true);
     if (startFolderId) view.setParent(startFolderId);
     const picker = new window.google.picker.PickerBuilder()
       .addView(view)
+      .enableFeature(window.google.picker.Feature.NAV_HIDDEN, false)
       .setOAuthToken(token)
       .setDeveloperKey(GOOGLE_PICKER_API_KEY)
       .setCallback((data) => {
